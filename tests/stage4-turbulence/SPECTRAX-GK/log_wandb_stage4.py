@@ -14,6 +14,9 @@ set of Stage 4 physics panels:
 
 The output directory name is configurable via `--run-name`, which maps to the
 directory name under the output root.
+
+Note: This is a trial script to explore the utility of WandB for Stage 4 result tracking.
+Unsure about how actually useful it will be.
 """
 
 from __future__ import annotations
