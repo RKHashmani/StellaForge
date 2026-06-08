@@ -68,6 +68,9 @@ stage4:
     average_window: 1.0
     sample_stride: 50
     diagnostics_stride: 1
+    
+    # The interval for the concurrent WandB monitor checks for new Stage 4 log output
+    wandb_poll_interval_minutes: 1
 
     # --- Parallelism ---
     max_parallel: 1

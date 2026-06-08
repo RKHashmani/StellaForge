@@ -11,6 +11,8 @@ channels = ["conda-forge", "bioconda"]
 snakemake-minimal = ">=8,<10"
 graphviz = ">=9,<15"
 pytest = ">=8,<9"
+wandb = ">=0.17.0,<1"
+pillow = ">=9.5.0,<11"
 
 [environments]
 pipeline = { features = ["pipeline"], no-default-feature = true }

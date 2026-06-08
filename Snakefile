@@ -52,6 +52,9 @@ S3_OUTPUT  = f"{DIRS['stage3_output']}/{filename('s3_output')}"
 STAGE4_CFG = config["stage4"]["spectrax_gk"]
 S4_CONFIG  = f"{DIRS['stage4_input']}/{filename('s4_config')}"
 S4_OUTPUT  = f"{DIRS['stage4_output']}/{filename('s4_output')}"
+S4_WANDB_POLL_INTERVAL_MINUTES = STAGE4_CFG.get("wandb_poll_interval_minutes", 10)
+S4_WANDB_STOP_FILE = f"{DIRS['stage4_output']}/.wandb-monitor.done"
+S4_WANDB_MONITOR_LOG = f"{DIRS['stage4_output']}/wandb_monitor.log"
 
 S5_CONFIG  = f"{DIRS['stage5_input']}/{filename('s5_config')}"
 S5_OUTPUT  = f"{DIRS['stage5_output']}/{filename('s5_output')}"
@@ -118,13 +121,36 @@ rule stage4_spectrax:
     log:
         f"{DIRS['stage4_output']}/{RUN_NAME}.log"
     shell:
-        stage4.radial_scan_cmd(
+        f"""
+        mkdir -p {DIRS['stage4_output']}
+        rm -f {S4_WANDB_STOP_FILE}
+        python tests/stage4-turbulence/SPECTRAX-GK/log_wandb_stage4_concurrent.py \
+            --output-dir {DIRS['stage4_output']} \
+            --progress-log {{log}} \
+            --poll-interval-minutes {S4_WANDB_POLL_INTERVAL_MINUTES} \
+            --stop-file {S4_WANDB_STOP_FILE} \
+            > {S4_WANDB_MONITOR_LOG} 2>&1 &
+        monitor_pid=$!
+        set +e
+        {stage4.radial_scan_cmd(
             docker_prefix=DOCKER_PREFIX,
             image=STAGE4_IMG,
             stage_cfg=STAGE4_CFG,
             output_dir=DIRS["stage4_output"],
             device=DEVICE,
-        ) + " 2>&1 | tee {log}"
+        )} 2>&1 | tee {{log}}
+        stage_status=${{{{PIPESTATUS[0]}}}}
+        touch {S4_WANDB_STOP_FILE}
+        wait "$monitor_pid"
+        monitor_status=$?
+        if (( stage_status != 0 )); then
+            exit "$stage_status"
+        fi
+        if (( monitor_status != 0 )); then
+            echo "warning: Stage 4 WandB monitor failed; see {S4_WANDB_MONITOR_LOG}" >&2
+        fi
+        exit 0
+        """
 
 rule stage5_neopax:
     input:
