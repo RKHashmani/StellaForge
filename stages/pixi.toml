@@ -55,6 +55,8 @@ neo-jax = ">=1.0.1,<2"
 spectraxgk = ">=1.5.0,<2"
 booz-xform-jax = ">=0.1.0,<0.2"
 h5py = ">=3.16.0,<4"
+wandb = ">=0.17.0,<1"
+pillow = ">=9.5.0,<11"
 
 [feature.spectrax-gk.tasks.stage-4-spectrax]
 cwd = "stage4-turbulence"
