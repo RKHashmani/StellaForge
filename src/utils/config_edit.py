@@ -23,6 +23,11 @@ def apply_assignments(text: str, assignments: Mapping[str, str]) -> str:
         The config file contents.
     assignments : Mapping[str, str]
         Maps each config key to its replacement value (the text after the ``=``).
+
+    Examples
+    --------
+    >>> apply_assignments("vmec_file = old", {"vmec_file": '"new.nc"'})
+    'vmec_file = "new.nc"'
     """
     for key, value in assignments.items():
         text = re.sub(
