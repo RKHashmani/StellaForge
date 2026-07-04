@@ -5,6 +5,8 @@ they cannot be imported as ``stages.stageN.<module>``. ``load_stage_module`` loa
 one by file path so its pure helpers (argument parsers, math, post-processing) can
 be unit tested in the ``test`` env. Those scripts import their solver packages
 lazily inside functions, so loading a module does not require the solver installed.
+A script's own directory is added to ``sys.path`` so a module-level import of a
+sibling script resolves.
 """
 
 from __future__ import annotations
@@ -42,5 +44,9 @@ def load_stage_module(relpath: str, name: str | None = None) -> ModuleType:
         raise ImportError(f"cannot create import spec for {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[mod_name] = module
+    # Some stage scripts import a sibling script by bare module name at module top,
+    # so the script's own directory must be importable before it is executed.
+    if str(path.parent) not in sys.path:
+        sys.path.insert(0, str(path.parent))
     spec.loader.exec_module(module)
     return module
