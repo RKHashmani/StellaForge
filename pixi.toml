@@ -23,7 +23,7 @@ scipy = ">=1.13,<2"
 pyyaml = ">=6,<7"
 
 [feature.test.tasks.test]
-cmd = "pytest -m 'not docker and not stage_env' && pytest --doctest-modules src/utils/config_edit.py src/utils/paths.py"
+cmd = "pytest -m 'not docker and not stage_env' && pytest --doctest-modules src/utils/config_edit.py src/utils/paths.py src/io_contracts.py"
 
 [environments]
 pipeline = { features = ["pipeline"], no-default-feature = true }
