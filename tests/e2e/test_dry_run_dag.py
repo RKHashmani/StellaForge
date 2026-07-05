@@ -7,7 +7,9 @@ forward-pass rules are scheduled, while ``stage5_post_processing`` is not (the
 default ``rule all`` target is a pure forward pass).
 
 Overriding ``output_dir`` to a tmp dir keeps the Snakefile's parse-time
-``prepare_neopax_config`` write, and every planned artifact path, out of the repo.
+``prepare_neopax_config`` write, and every planned artifact path, out of the repo;
+``--runtime-source-cache-path`` keeps Snakemake's own runtime source cache under tmp
+too, so the dry run stays hermetic in restricted (sandboxed or CI) environments.
 """
 
 from __future__ import annotations
@@ -23,6 +25,9 @@ def test_forward_pass_dag_dry_run(tmp_path: Path) -> None:
     result = subprocess.run(
         ["snakemake", "-n",
          "--configfile", "inputs/quick_run/config.yaml",
+         # Redirect Snakemake's runtime source cache under tmp so the dry run is
+         # hermetic in restricted/CI environments (default is the user cache dir).
+         "--runtime-source-cache-path", f"{tmp_path}/srccache",
          "--config", f"output_dir={tmp_path}/out"],
         cwd=REPO_ROOT,
         capture_output=True,
