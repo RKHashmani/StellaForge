@@ -10,9 +10,18 @@ gpu-only ``--gpu-ids`` flag.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from src.stage3_helper import radial_scan_cmd
+from tests.helpers.stage_import import load_stage_module
+
+_STAGE3_SCRIPT = "stages/stage3-neoclassical/sfincs_jax_radial_scan.py"
+# Snakemake substitutes {input.*}/{output.*} at run time; swap them for literal path
+# tokens so the emitted command parses as a plain argument vector here.
+_PLACEHOLDER = re.compile(r"\{(?:input|output)\.[A-Za-z0-9_]+\}")
+_scan = load_stage_module(_STAGE3_SCRIPT)
 
 
 def cmd(**overrides) -> str:
@@ -72,3 +81,30 @@ def test_gpu_ids_only_on_gpu() -> None:
     assert "--gpu-ids 0,1" in on_gpu
     assert "--gpu-ids" not in cmd(stage_cfg=cfg, device="cpu")  # cpu suppresses it
     assert "--gpu-ids" not in cmd(stage_cfg={}, device="gpu")   # gpu but no ids
+
+
+def test_emitted_flags_parse_with_stage_script() -> None:
+    # Cross-check: every flag radial_scan_cmd can emit must be one the stage script's own
+    # parser accepts. Populate all optionals/toggles, then feed the argument vector to the
+    # script's build_parser. A helper flag the script renamed or dropped makes argparse
+    # sys.exit(2); this catches helper-vs-script drift the exact-string tests cannot.
+    stage_cfg = {
+        "profiles_source": "analytical",
+        "neopax_result": "outputs/quick_run/stage5_transport/transport_solution.h5",
+        "ntheta": 31,
+        "nzeta": 15,
+        "nxi": 12,
+        "nx": 64,
+        "solver_tolerance": 1.0e-6,
+        "max_parallel": 8,
+        "gpu_ids": "0,1",
+        "plot": False,            # emits --no-plot
+        "verbose_workers": True,  # emits --verbose-workers
+    }
+    concrete = _PLACEHOLDER.sub("placeholder_path", cmd(stage_cfg=stage_cfg, device="gpu"))
+    tokens = concrete.split()
+    argv = tokens[tokens.index(_STAGE3_SCRIPT) + 1:]
+    try:
+        _scan.build_parser().parse_args(argv)
+    except SystemExit as exc:
+        pytest.fail(f"stage script parser rejected a helper-emitted flag: argv={argv} (exit {exc.code})")

@@ -9,7 +9,7 @@ minimal synthetic config that exercises the ``{run_name}`` templating in isolati
 
 from __future__ import annotations
 
-from src.utils import RESOLVED_COMMON_CONFIG, resolve_pipeline_paths
+from src.utils import resolve_pipeline_paths
 
 EXPECTED_KEYS = {
     "input_dir",
@@ -40,6 +40,8 @@ def test_quick_run_paths_match_contract(paths: dict) -> None:
     assert paths["s1_input"] == "inputs/quick_run/vmec_input.HSX_vacuum_ns201_quickrun"
     assert paths["s1_output"] == "outputs/quick_run/stage1_equilibrium/wout_HSX_vacuum_ns201_quickrun.nc"
     assert paths["s2_output"] == "outputs/quick_run/stage2_boozer/boozmn_HSX_vacuum_ns201_quickrun.nc"
+    assert paths["s3_output"] == "outputs/quick_run/stage3_neoclassical/sfincs_jax_flux_profiles.h5"
+    assert paths["s4_output"] == "outputs/quick_run/stage4_turbulence/neopax_fluxes.h5"
     assert paths["s3_config"] == "inputs/quick_run/sfincs_input.HSX_vacuum_ns201_quickrun"
     assert paths["s4_config"] == "inputs/quick_run/HSX_vacuum_ns201_quickrun.toml"
     assert paths["s5_config"] == "inputs/quick_run/common_input.toml"
@@ -48,7 +50,6 @@ def test_quick_run_paths_match_contract(paths: dict) -> None:
 
 
 def test_quick_run_generated_paths(paths: dict) -> None:
-    assert paths["s5_resolved_config"].endswith(RESOLVED_COMMON_CONFIG)
     assert paths["s5_resolved_config"] == "outputs/quick_run/stage5_transport/common_input_updated.toml"
     # The evolved Stage 1 boundary the loop feeds back lives under the post-processing dir.
     assert paths["s1_feedback"] == "outputs/quick_run/stage5_post_processing/vmec_input.HSX_vacuum_ns201_quickrun"

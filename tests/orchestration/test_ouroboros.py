@@ -76,8 +76,9 @@ def test_run_forward_pass_builds_snakemake_argv(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_main_rejects_nonpositive_max_iters(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The guard fires before any config read or forward pass.
-    monkeypatch.setattr("sys.argv", ["ouroboros", "--max-iters", "0"])
+    # A nonexistent --config pins the ordering: the max-iters guard must fire before any
+    # config read, so main() raises ValueError here rather than FileNotFoundError.
+    monkeypatch.setattr("sys.argv", ["ouroboros", "--max-iters", "0", "--config", "/no/such/config.yaml"])
     with pytest.raises(ValueError, match="max-iters"):
         ouroboros.main()
 
