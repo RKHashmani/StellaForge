@@ -9,6 +9,8 @@ needs no solver.
 
 from __future__ import annotations
 
+from types import ModuleType
+
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
@@ -52,8 +54,21 @@ def test_choose_radius_empty_filter_raises() -> None:
 
 # --- _build_standard_analytical_snapshot ---
 
-def test_snapshot_shapes() -> None:
-    snap = scan._build_standard_analytical_snapshot({}, n_species=3, n_radial=5)
+# The Stage 3 and Stage 4 scan scripts each carry their own copy of
+# _build_standard_analytical_snapshot. Running the snapshot tests against both copies
+# guards against the duplicated helpers silently drifting apart. The Stage 4 module is
+# also loaded by the Stage 4 test file; load_stage_module caches by file, so this reuses it.
+spectrax_scan = load_stage_module("stages/stage4-turbulence/spectrax_gk_radial_scan.py")
+
+SNAPSHOT_MODULES = [
+    pytest.param(scan, id="sfincs_jax"),
+    pytest.param(spectrax_scan, id="spectrax_gk"),
+]
+
+
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+def test_snapshot_shapes(module: ModuleType) -> None:
+    snap = module._build_standard_analytical_snapshot({}, n_species=3, n_radial=5)
     assert snap.rho.shape == (5,)
     assert snap.density.shape == (3, 5)
     assert snap.temperature.shape == (3, 5)
@@ -61,17 +76,19 @@ def test_snapshot_shapes() -> None:
     assert snap.time_value is None
 
 
-def test_snapshot_core_and_edge_values() -> None:
-    snap = scan._build_standard_analytical_snapshot({}, n_species=3, n_radial=5)
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+def test_snapshot_core_and_edge_values(module: ModuleType) -> None:
+    snap = module._build_standard_analytical_snapshot({}, n_species=3, n_radial=5)
     # defaults: n0 = 4.21, n_edge = 0.6, T0 = 17.8, T_edge = 0.7; electron scale = 1.0
-    assert_allclose(snap.density[0, 0], 4.21)
-    assert_allclose(snap.density[0, -1], 0.6)
-    assert_allclose(snap.temperature[:, 0], 17.8)
-    assert_allclose(snap.temperature[:, -1], 0.7)
+    assert_allclose(snap.density[0, 0], 4.21, rtol=1e-12)
+    assert_allclose(snap.density[0, -1], 0.6, rtol=1e-12)
+    assert_allclose(snap.temperature[:, 0], 17.8, rtol=1e-12)
+    assert_allclose(snap.temperature[:, -1], 0.7, rtol=1e-12)
 
 
-def test_snapshot_species_density_ratios() -> None:
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+def test_snapshot_species_density_ratios(module: ModuleType) -> None:
     cfg = {"profiles": {"deuterium_ratio": 0.6, "tritium_ratio": 0.4}}
-    snap = scan._build_standard_analytical_snapshot(cfg, n_species=3, n_radial=5)
-    assert_allclose(snap.density[1], 0.6 * snap.density[0])
-    assert_allclose(snap.density[2], 0.4 * snap.density[0])
+    snap = module._build_standard_analytical_snapshot(cfg, n_species=3, n_radial=5)
+    assert_allclose(snap.density[1], 0.6 * snap.density[0], rtol=1e-12)
+    assert_allclose(snap.density[2], 0.4 * snap.density[0], rtol=1e-12)

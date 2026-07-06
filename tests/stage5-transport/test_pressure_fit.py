@@ -48,9 +48,9 @@ def test_load_total_pressure_temperature_density_matches_pressure(tmp_path: Path
     rho_td, total_td, idx_td = fit_mod._load_total_pressure(file_td, time_index=-1, final_time=False)
     rho_p, total_p, idx_p = fit_mod._load_total_pressure(file_p, time_index=-1, final_time=False)
 
-    assert_allclose(total_td, total_p)
-    assert_allclose(total_p, np.sum(pressure, axis=0))
-    assert_allclose(rho_td, rho)
+    assert_allclose(total_td, total_p, rtol=1e-12)
+    assert_allclose(total_p, np.sum(pressure, axis=0), rtol=1e-12)
+    assert_allclose(rho_td, rho, rtol=1e-12)
     assert idx_td is None and idx_p is None  # static profile has no resolved time index
 
 
@@ -65,8 +65,8 @@ def test_load_total_pressure_final_time_selects_last_slice(tmp_path: Path) -> No
     _, total_initial, idx_initial = fit_mod._load_total_pressure(f3d, time_index=0, final_time=False)
 
     assert idx_final == 1 and idx_initial == 0
-    assert_allclose(total_final, np.sum(slice1, axis=0))
-    assert_allclose(total_initial, np.sum(slice0, axis=0))
+    assert_allclose(total_final, np.sum(slice1, axis=0), rtol=1e-12)
+    assert_allclose(total_initial, np.sum(slice0, axis=0), rtol=1e-12)
 
 
 def test_load_total_pressure_missing_rho_raises(tmp_path: Path) -> None:
@@ -88,5 +88,9 @@ def test_write_vmec_input_rewrites_pressure_keys(tmp_path: Path) -> None:
     text = out.read_text()
     assert "PMASS_TYPE = 'power_series'" in text
     assert "PRES_SCALE = 1.0000000000000000E+00" in text
-    assert fit_mod._format_am_line(coeffs) in text
+    # Literal AM line for coeffs [3.0, -2.0, 0.5], independent of the writer's own formatter,
+    # so a bug in _format_am_line cannot mask itself.
+    expected_am_line = "AM = 3.0000000000000000E+00, -2.0000000000000000E+00, 5.0000000000000000E-01"
+    assert expected_am_line in text
+    assert "AM = 0.0" not in text  # the template AM line is replaced in place, not left behind or duplicated
     assert "AM = 0.0" in fixture.read_text()  # committed fixture left unmodified
