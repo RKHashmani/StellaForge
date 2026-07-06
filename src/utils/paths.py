@@ -51,6 +51,30 @@ def resolve_pipeline_paths(
         - paths generated under ``outputs/``: ``s5_resolved_config`` (the
           path-resolved NEOPAX copy NEOPAX actually runs) and ``s1_feedback``
           (the evolved Stage 1 boundary the loop feeds to the next iteration).
+
+    Examples
+    --------
+    >>> config = {
+    ...     "run_name": "demo",
+    ...     "input_dir": "inputs/demo",
+    ...     "output_dir": "outputs/demo",
+    ...     "filenames": {
+    ...         "s1_input": "vmec_input.{run_name}",
+    ...         "s3_config": "sfincs_input.{run_name}",
+    ...         "s4_config": "{run_name}.toml",
+    ...         "s5_config": "common_input.toml",
+    ...         "s1_output": "wout_{run_name}.nc",
+    ...         "s2_output": "boozmn_{run_name}.nc",
+    ...         "s3_output": "sfincs_jax_flux_profiles.h5",
+    ...         "s4_output": "neopax_fluxes.h5",
+    ...         "s5_output": "transport_solution.h5",
+    ...         "s5_signal": "converge_status.json",
+    ...     },
+    ... }
+    >>> resolve_pipeline_paths(config)["s1_output"]
+    'outputs/demo/stage1_equilibrium/wout_demo.nc'
+    >>> resolve_pipeline_paths(config, output_dir="outputs/demo/loop/iter_1/output")["s5_signal"]
+    'outputs/demo/loop/iter_1/output/stage5_post_processing/converge_status.json'
     """
     run_name = config["run_name"]
     input_dir = input_dir if input_dir is not None else config["input_dir"]
