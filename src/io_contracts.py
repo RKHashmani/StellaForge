@@ -317,17 +317,45 @@ def validate_neopax_fluxes(path: Path | str) -> None:
 
 # wout_*.nc ------------------------------------------------------------------------------
 
-_WOUT_2D = ("rmnc", "zmns", "lmns", "bmnc", "bsubumnc", "bsubvmnc")
+# rmnc/zmns/lmns live on the mn_mode grid indexed by xm/xn; bmnc/bsubumnc/bsubvmnc live on
+# the denser Nyquist grid indexed by xm_nyq/xn_nyq. Each family is checked against its own
+# mode count, so they are tracked separately.
+_WOUT_2D = ("rmnc", "zmns", "lmns")
+_WOUT_2D_NYQ = ("bmnc", "bsubumnc", "bsubvmnc")
 _WOUT_1D = ("iotas", "phi", "phipf")
 _WOUT_MODES = ("xm", "xn")
-_WOUT_FIELDS = _WOUT_2D + _WOUT_1D + _WOUT_MODES + ("nfp",)
+_WOUT_MODES_NYQ = ("xm_nyq", "xn_nyq")
+# Minor-radius scalars the Stage 4 reader needs to set the reference length; Aminor_p
+# directly, or volume_p with Rmajor_p to derive it.
+_WOUT_MINOR_RADIUS = ("Aminor_p", "volume_p", "Rmajor_p")
+_WOUT_FIELDS = (
+    _WOUT_2D + _WOUT_2D_NYQ + _WOUT_1D + _WOUT_MODES + _WOUT_MODES_NYQ + _WOUT_MINOR_RADIUS + ("nfp",)
+)
+
+
+def _check_wout_2d(arr: np.ndarray, name: str, ns: int | None, mnmax: int | None, problems: list[str]) -> None:
+    """Record problems for a wout Fourier-coefficient array shaped ``(ns, mode count)``."""
+    if arr.ndim != 2:
+        problems.append(f"'{name}' must be 2D (ns, mode count), got shape {arr.shape}")
+    else:
+        if ns is not None and arr.shape[0] != ns:
+            problems.append(f"'{name}' radial axis {arr.shape[0]} != ns {ns}")
+        if mnmax is not None and arr.shape[1] != mnmax:
+            problems.append(f"'{name}' mode axis {arr.shape[1]} != mode count {mnmax}")
+    _finite(arr, name, problems)
 
 
 def _check_wout(data: dict[str, np.ndarray | None]) -> list[str]:
     """Check the Stage-2-consumed VMEC ``wout`` geometry subset.
 
-    The Fourier coefficient arrays are meaningless without their mode-number arrays
-    ``xm``/``xn`` and field-period count ``nfp``, so those are part of the contract.
+    VMEC writes the shape coefficients ``rmnc``/``zmns``/``lmns`` on the ``mn_mode`` grid
+    indexed by ``xm``/``xn``, and the field-strength coefficients
+    ``bmnc``/``bsubumnc``/``bsubvmnc`` on the denser Nyquist grid indexed by
+    ``xm_nyq``/``xn_nyq``. Each coefficient family is checked against the mode count of its
+    own grid, and both families share the radial axis ``ns``. The coefficients are
+    meaningless without those mode-number arrays and the field-period count ``nfp``, so all
+    are required. The minor-radius scalars the Stage 4 reader needs are required too:
+    ``Aminor_p``, or ``volume_p`` together with ``Rmajor_p`` to derive it.
     """
     problems: list[str] = []
 
@@ -339,6 +367,14 @@ def _check_wout(data: dict[str, np.ndarray | None]) -> list[str]:
     elif rmnc is not None and rmnc.ndim == 2:
         mnmax = rmnc.shape[1]
 
+    xm_nyq = data.get("xm_nyq")
+    bmnc = data.get("bmnc")
+    mnmax_nyq: int | None = None
+    if xm_nyq is not None and xm_nyq.ndim == 1:
+        mnmax_nyq = xm_nyq.shape[0]
+    elif bmnc is not None and bmnc.ndim == 2:
+        mnmax_nyq = bmnc.shape[1]
+
     iotas = data.get("iotas")
     ns: int | None = None
     if iotas is not None and iotas.ndim == 1:
@@ -349,14 +385,11 @@ def _check_wout(data: dict[str, np.ndarray | None]) -> list[str]:
     for name in _WOUT_2D:
         arr = data.get(name)
         if _require(arr, name, problems):
-            if arr.ndim != 2:
-                problems.append(f"'{name}' must be 2D (ns, mnmax), got shape {arr.shape}")
-            else:
-                if ns is not None and arr.shape[0] != ns:
-                    problems.append(f"'{name}' radial axis {arr.shape[0]} != ns {ns}")
-                if mnmax is not None and arr.shape[1] != mnmax:
-                    problems.append(f"'{name}' mode axis {arr.shape[1]} != mnmax {mnmax}")
-            _finite(arr, name, problems)
+            _check_wout_2d(arr, name, ns, mnmax, problems)
+    for name in _WOUT_2D_NYQ:
+        arr = data.get(name)
+        if _require(arr, name, problems):
+            _check_wout_2d(arr, name, ns, mnmax_nyq, problems)
 
     for name in _WOUT_1D:
         arr = data.get(name)
@@ -369,9 +402,18 @@ def _check_wout(data: dict[str, np.ndarray | None]) -> list[str]:
         if _require(arr, name, problems):
             _check_1d(arr, name, mnmax, problems)
             _finite(arr, name, problems)
+    for name in _WOUT_MODES_NYQ:
+        arr = data.get(name)
+        if _require(arr, name, problems):
+            _check_1d(arr, name, mnmax_nyq, problems)
+            _finite(arr, name, problems)
 
     if data.get("nfp") is None:
         problems.append("missing required field 'nfp'")
+
+    aminor = data.get("Aminor_p")
+    if aminor is None and not (data.get("volume_p") is not None and data.get("Rmajor_p") is not None):
+        problems.append("missing required minor-radius scalars: 'Aminor_p' or both 'volume_p' and 'Rmajor_p'")
 
     return problems
 
@@ -394,9 +436,12 @@ def validate_wout(path: Path | str) -> None:
 # boozmn_*.nc ----------------------------------------------------------------------------
 
 _BOOZMN_2D = ("bmnc_b",)
-_BOOZMN_1D_PROFILES = ("iota_b", "buco_b", "bvco_b", "phi_b", "phip_b")
+_BOOZMN_1D_PROFILES = ("iota_b", "buco_b", "bvco_b")
+# Some BOOZ_XFORM writers (including the in-repo booz_xform_jax) omit the toroidal-flux
+# profiles phi_b/phip_b; they are optional, but drift-checked when present.
+_BOOZMN_1D_OPTIONAL = ("phi_b", "phip_b")
 _BOOZMN_MODES = ("ixm_b", "ixn_b")
-_BOOZMN_FIELDS = _BOOZMN_2D + _BOOZMN_1D_PROFILES + _BOOZMN_MODES + ("jlist", "nfp_b")
+_BOOZMN_FIELDS = _BOOZMN_2D + _BOOZMN_1D_PROFILES + _BOOZMN_1D_OPTIONAL + _BOOZMN_MODES + ("jlist", "nfp_b")
 
 
 def _check_boozmn(data: dict[str, np.ndarray | None]) -> list[str]:
@@ -406,6 +451,8 @@ def _check_boozmn(data: dict[str, np.ndarray | None]) -> list[str]:
     ``ixm_b``/``ixn_b`` mode-number arrays. The 1D profiles are only checked for rank
     and finiteness: BOOZ_XFORM variants disagree on whether they span every VMEC surface
     or only the ``jlist`` subset, so their length is not cross-checked against ``bmnc_b``.
+    The toroidal-flux profiles ``phi_b``/``phip_b`` are optional because some writers omit
+    them; when a file does provide them, they are still checked for rank and finiteness.
     """
     problems: list[str] = []
 
@@ -427,6 +474,13 @@ def _check_boozmn(data: dict[str, np.ndarray | None]) -> list[str]:
     for name in _BOOZMN_1D_PROFILES:
         arr = data.get(name)
         if _require(arr, name, problems):
+            if arr.ndim != 1:
+                problems.append(f"'{name}' must be 1D (per-surface profile), got shape {arr.shape}")
+            _finite(arr, name, problems)
+
+    for name in _BOOZMN_1D_OPTIONAL:
+        arr = data.get(name)
+        if arr is not None:
             if arr.ndim != 1:
                 problems.append(f"'{name}' must be 1D (per-surface profile), got shape {arr.shape}")
             _finite(arr, name, problems)

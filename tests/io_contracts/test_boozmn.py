@@ -1,9 +1,11 @@
 """Tests for the Boozer ``boozmn`` NetCDF contract in ``src/io_contracts.py``.
 
-The Stage-3-consumed subset is ``bmnc_b`` (indexed ``[surface, mode]``), the 1D Boozer
-profiles, the ``ixm_b``/``ixn_b`` mode-number arrays, ``jlist``, and ``nfp_b``.
-Shape-mismatch cases run on the inner checker; the valid and missing-``bmnc_b`` files
-exercise the NetCDF read plus the raise.
+The Stage-3-consumed subset is ``bmnc_b`` (indexed ``[surface, mode]``), the required 1D
+Boozer profiles ``iota_b``/``buco_b``/``bvco_b``, the ``ixm_b``/``ixn_b`` mode-number
+arrays, ``jlist``, and ``nfp_b``. The toroidal-flux profiles ``phi_b``/``phip_b`` are
+absent from the real writer, so the valid case omits them; when a file does provide them
+they are still drift-checked for rank. Shape-mismatch cases run on the inner checker; the
+valid and missing-``bmnc_b`` files exercise the NetCDF read plus the raise.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from tests.helpers.synthetic import write_boozmn
 
 def _valid(n_surf: int = 3, mnboz: int = 4) -> dict[str, np.ndarray | None]:
     data: dict[str, np.ndarray | None] = {"bmnc_b": np.ones((n_surf, mnboz))}
-    data.update({name: np.linspace(0.0, 1.0, n_surf) for name in ("iota_b", "buco_b", "bvco_b", "phi_b", "phip_b")})
+    data.update({name: np.linspace(0.0, 1.0, n_surf + 1) for name in ("iota_b", "buco_b", "bvco_b")})
     data.update({"ixm_b": np.arange(mnboz), "ixn_b": np.zeros(mnboz, dtype=int)})
     data.update({"jlist": np.arange(2, 2 + n_surf), "nfp_b": np.array(1)})
     return data
@@ -45,6 +47,12 @@ def test_mode_array_length_mismatch_flagged() -> None:
     data = _valid(n_surf=3, mnboz=4)
     data["ixm_b"] = np.arange(2)  # sets mnboz to 2, so ixn_b length 4 is inconsistent
     assert any("ixn_b" in problem for problem in _check_boozmn(data))
+
+
+def test_present_2d_phi_b_flagged() -> None:
+    data = _valid()
+    data["phi_b"] = np.ones((3, 2))  # optional, but a 2D array is drift and must be flagged
+    assert any("phi_b" in problem and "1D" in problem for problem in _check_boozmn(data))
 
 
 def test_missing_nfp_b_flagged() -> None:
