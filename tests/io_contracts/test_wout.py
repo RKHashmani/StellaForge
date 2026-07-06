@@ -48,6 +48,18 @@ def test_nyq_mode_axis_mismatch_flagged() -> None:
     assert any("bmnc" in problem and "mode axis" in problem for problem in _check_wout(data))
 
 
+def test_nonfinite_rmnc_flagged() -> None:
+    data = _valid()
+    data["rmnc"][0, 0] = np.nan
+    assert "'rmnc' contains non-finite values" in _check_wout(data)
+
+
+def test_1d_profile_length_mismatch_flagged() -> None:
+    data = _valid(ns=4, mnmax=3, mnmax_nyq=5)
+    data["phi"] = np.ones(3)  # length 3 != ns 4 (ns inferred from iotas)
+    assert any("phi" in problem and "length" in problem for problem in _check_wout(data))
+
+
 def test_missing_xm_flagged() -> None:
     data = _valid()
     data["xm"] = None

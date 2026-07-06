@@ -15,8 +15,11 @@ non-empty. Lazy imports keep the module (and the pure checkers) usable without t
 heavy I/O libraries present.
 
 Contracts are built to the reader/writer code, not the spec docs, wherever in-repo code
-defines them; the two NetCDF files have only upstream readers, so their subsets follow
-the documented handoff plus the mode-number arrays their coefficients are indexed by.
+defines them. The two NetCDF files are read by upstream stages and also in-repo by the
+Stage 4 radial scan (stages/stage4-turbulence/spectrax_gk_radial_scan.py), which reads the
+wout minor-radius scalars and the boozmn bmnc_b/ixm_b/ixn_b coefficients; their subsets
+follow the documented handoff, the mode-number arrays their coefficients are indexed by,
+and those in-repo reads.
 """
 
 from __future__ import annotations
@@ -78,6 +81,29 @@ def _as_text(value: Any) -> str:
     return value.decode() if isinstance(value, bytes) else str(value)
 
 
+def _check_rho(rho: np.ndarray | None, problems: list[str]) -> int | None:
+    """Check the shared required 1D ``rho`` coordinate, returning its length or ``None``."""
+    n_rho: int | None = None
+    if _require(rho, "rho", problems):
+        if rho.ndim != 1:
+            problems.append(f"'rho' must be 1D, got shape {rho.shape}")
+        else:
+            n_rho = rho.shape[0]
+        _finite(rho, "rho", problems)
+    return n_rho
+
+
+def _check_species_names(species: np.ndarray | None, name: str, problems: list[str]) -> int | None:
+    """Check a required 1D species-label array (``name`` labels it), returning its count or ``None``."""
+    n_species: int | None = None
+    if _require(species, name, problems):
+        if species.ndim != 1:
+            problems.append(f"'{name}' must be 1D, got shape {species.shape}")
+        else:
+            n_species = species.shape[0]
+    return n_species
+
+
 # transport_solution.h5 ------------------------------------------------------------------
 
 _TRANSPORT_FIELDS = ("rho", "density", "temperature", "pressure", "Er", "ts")
@@ -102,14 +128,7 @@ def _check_transport_solution(data: dict[str, np.ndarray | None]) -> list[str]:
     """
     problems: list[str] = []
 
-    rho = data.get("rho")
-    n_rho: int | None = None
-    if _require(rho, "rho", problems):
-        if rho.ndim != 1:
-            problems.append(f"'rho' must be 1D, got shape {rho.shape}")
-        else:
-            n_rho = rho.shape[0]
-        _finite(rho, "rho", problems)
+    n_rho = _check_rho(data.get("rho"), problems)
 
     density = data.get("density")
     temperature = data.get("temperature")
@@ -119,6 +138,10 @@ def _check_transport_solution(data: dict[str, np.ndarray | None]) -> list[str]:
     pressure = data.get("pressure")
     if pressure is not None:
         _check_species_profile(pressure, "pressure", n_rho, problems)
+        if density is not None and pressure.ndim != density.ndim:
+            problems.append(
+                f"'pressure' ndim {pressure.ndim} != 'density' ndim {density.ndim} (pressure must share density's rank)"
+            )
 
     er = data.get("Er")
     if _require(er, "Er", problems):
@@ -183,14 +206,7 @@ def _check_sfincs_flux(data: dict[str, np.ndarray | None], attrs: dict[str, Any]
     """Check the Stage 3 neoclassical flux profiles written by the sfincs radial scan."""
     problems: list[str] = []
 
-    rho = data.get("rho")
-    n_radii: int | None = None
-    if _require(rho, "rho", problems):
-        if rho.ndim != 1:
-            problems.append(f"'rho' must be 1D, got shape {rho.shape}")
-        else:
-            n_radii = rho.shape[0]
-        _finite(rho, "rho", problems)
+    n_radii = _check_rho(data.get("rho"), problems)
 
     for name in ("r", "rHat"):
         arr = data.get(name)
@@ -198,13 +214,7 @@ def _check_sfincs_flux(data: dict[str, np.ndarray | None], attrs: dict[str, Any]
             _check_1d(arr, name, n_radii, problems)
             _finite(arr, name, problems)
 
-    n_species: int | None = None
-    species = data.get("species_names")
-    if _require(species, "species_names", problems):
-        if species.ndim != 1:
-            problems.append(f"'species_names' must be 1D, got shape {species.shape}")
-        else:
-            n_species = species.shape[0]
+    n_species = _check_species_names(data.get("species_names"), "species_names", problems)
 
     for name in ("Gamma", "Q", "Upar"):
         arr = data.get(name)
@@ -245,27 +255,14 @@ def _check_neopax_fluxes(
     """Check the Stage 4 turbulence flux profiles written for NEOPAX consumption."""
     problems: list[str] = []
 
-    rho = data.get("rho")
-    n_radii: int | None = None
-    if _require(rho, "rho", problems):
-        if rho.ndim != 1:
-            problems.append(f"'rho' must be 1D, got shape {rho.shape}")
-        else:
-            n_radii = rho.shape[0]
-        _finite(rho, "rho", problems)
+    n_radii = _check_rho(data.get("rho"), problems)
 
     r = data.get("r")
     if _require(r, "r", problems):
         _check_1d(r, "r", n_radii, problems)
         _finite(r, "r", problems)
 
-    n_species: int | None = None
-    if species_names is None:
-        problems.append("missing required field 'meta/species_names'")
-    elif species_names.ndim != 1:
-        problems.append(f"'meta/species_names' must be 1D, got shape {species_names.shape}")
-    else:
-        n_species = species_names.shape[0]
+    n_species = _check_species_names(species_names, "meta/species_names", problems)
 
     for name in ("Gamma", "Q", "Upar"):
         arr = data.get(name)
@@ -534,7 +531,7 @@ def _check_signal(signal: Any) -> list[str]:
     for key in ("converged", "halt"):
         if key not in signal:
             problems.append(f"missing required key '{key}'")
-        elif not isinstance(signal[key], (bool, np.bool_)):
+        elif not isinstance(signal[key], bool):
             problems.append(f"key '{key}' must be bool, got {type(signal[key]).__name__}")
     return problems
 

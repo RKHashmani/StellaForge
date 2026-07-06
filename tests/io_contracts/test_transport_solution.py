@@ -57,6 +57,43 @@ def test_rho_axis_mismatch_flagged() -> None:
     assert any("density" in problem and "trailing axis" in problem for problem in _check_transport_solution(data))
 
 
+def test_nonfinite_density_flagged() -> None:
+    data = _valid_data()
+    data["density"][0, 0] = np.nan
+    assert "'density' contains non-finite values" in _check_transport_solution(data)
+
+
+def test_rho_not_1d_flagged() -> None:
+    data = _valid_data()
+    data["rho"] = np.ones((2, 3))  # rho must be a 1D radial coordinate
+    assert any("rho" in problem and "must be 1D" in problem for problem in _check_transport_solution(data))
+
+
+def test_pressure_rank_mismatch_flagged() -> None:
+    data = _valid_data(n_species=3, n_rho=5)
+    data["pressure"] = np.ones((4, 3, 5))  # 3D pressure while density is 2D
+    assert any(
+        "pressure" in problem and "density" in problem and "ndim" in problem
+        for problem in _check_transport_solution(data)
+    )
+
+
+def test_er_trailing_axis_mismatch_flagged() -> None:
+    data = _valid_data(n_rho=5)
+    data["Er"] = np.ones(4)  # trailing axis 4 != len(rho) 5
+    assert any("Er" in problem and "trailing axis" in problem for problem in _check_transport_solution(data))
+
+
+def test_ts_length_mismatch_flagged() -> None:
+    n_time, n_species, n_rho = 4, 3, 5
+    data = _valid_data(n_species=n_species, n_rho=n_rho)
+    data["density"] = np.ones((n_time, n_species, n_rho))
+    data["temperature"] = np.ones((n_time, n_species, n_rho))
+    data["Er"] = np.ones((n_time, n_rho))
+    data["ts"] = np.arange(n_time - 1, dtype=float)  # length 3 != time axis 4
+    assert any("ts" in problem and "time axis" in problem for problem in _check_transport_solution(data))
+
+
 def test_valid_file_passes(tmp_path: Path) -> None:
     rho = np.linspace(0.0, 1.0, 5)
     profile = np.ones((3, 5))

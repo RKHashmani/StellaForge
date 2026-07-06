@@ -51,6 +51,12 @@ def test_missing_attr_flagged() -> None:
     assert "missing required root attribute 'axis_zero_padded'" in _check_sfincs_flux(_valid_data(), {})
 
 
+def test_nonfinite_gamma_flagged() -> None:
+    data = _valid_data()
+    data["Gamma"][0, 0] = np.nan
+    assert "'Gamma' contains non-finite values" in _check_sfincs_flux(data, {"axis_zero_padded": True})
+
+
 def test_valid_file_passes(tmp_path: Path) -> None:
     rho = np.linspace(0.0, 1.0, 5)
     flux = np.ones((3, 5))

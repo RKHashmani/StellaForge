@@ -54,6 +54,12 @@ def test_missing_minor_radius_flagged() -> None:
     assert "missing required meta attribute 'minor_radius_m'" in _check_neopax_fluxes(data, species, attrs)
 
 
+def test_nonfinite_q_flagged() -> None:
+    data, species, attrs = _valid()
+    data["Q"][0, 0] = np.nan
+    assert "'Q' contains non-finite values" in _check_neopax_fluxes(data, species, attrs)
+
+
 def test_valid_file_passes(tmp_path: Path) -> None:
     rho = np.linspace(0.0, 1.0, 5)
     flux = np.ones((3, 5))

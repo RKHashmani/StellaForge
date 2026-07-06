@@ -49,6 +49,12 @@ def test_mode_array_length_mismatch_flagged() -> None:
     assert any("ixn_b" in problem for problem in _check_boozmn(data))
 
 
+def test_nonfinite_bmnc_flagged() -> None:
+    data = _valid()
+    data["bmnc_b"][0, 0] = np.nan
+    assert "'bmnc_b' contains non-finite values" in _check_boozmn(data)
+
+
 def test_present_2d_phi_b_flagged() -> None:
     data = _valid()
     data["phi_b"] = np.ones((3, 2))  # optional, but a 2D array is drift and must be flagged

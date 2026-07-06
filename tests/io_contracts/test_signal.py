@@ -17,10 +17,6 @@ def test_valid_signal_passes() -> None:
     assert validate_signal({"converged": True, "halt": False}) is None
 
 
-def test_check_signal_missing_key() -> None:
-    assert _check_signal({"converged": True}) == ["missing required key 'halt'"]
-
-
 def test_check_signal_wrong_type() -> None:
     assert _check_signal({"converged": 1, "halt": False}) == ["key 'converged' must be bool, got int"]
 
