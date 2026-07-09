@@ -17,6 +17,9 @@ import pytest
 from tests.helpers.stage_import import REPO_ROOT, load_stage_module
 
 
+# `load_stage_module` registers modules in the global `sys.modules`. This fixture snapshots that registry before the
+# test and deletes any entries the test added afterward. A test using it can load throwaway modules without leaking them
+# into later tests.
 @pytest.fixture
 def clean_sys_modules() -> None:
     """Remove any ``sys.modules`` entries a test adds, so probes do not leak."""
@@ -33,6 +36,9 @@ def _relpath(script: Path) -> str:
     return os.path.relpath(script, REPO_ROOT)
 
 
+# `load_stage_module` should cache by file, running a script's body only once. This writes a probe script that appends
+# an "x" to a counter file every time its body runs, loads it twice, and asserts both loads return the very same module
+# object and that the counter contains a single "x" (the body ran once, not once per call).
 def test_reloading_same_file_returns_cached_and_executes_once(
     tmp_path: Path, clean_sys_modules: None
 ) -> None:
@@ -53,6 +59,9 @@ def test_reloading_same_file_returns_cached_and_executes_once(
     assert counter.read_text() == "x"  # body ran exactly once, not once per call
 
 
+# The loader keys modules by filename stem, so two different files sharing a stem would collide. This creates two files
+# with the same name in different folders, loads the first, and asserts loading the second raises ImportError whose
+# message names both paths, so the collision fails loudly instead of one file silently shadowing the other.
 def test_stem_collision_with_different_file_raises(tmp_path: Path, clean_sys_modules: None) -> None:
     dir_a = tmp_path / "col_a"
     dir_b = tmp_path / "col_b"
@@ -72,6 +81,9 @@ def test_stem_collision_with_different_file_raises(tmp_path: Path, clean_sys_mod
     assert "col_b" in message  # names the requested file's path
 
 
+# If a script raises while being imported, the loader must not leave a half-initialized module cached (which a later
+# load could mistake for success). This writes a script that raises on import, asserts that error propagates, and then
+# asserts the module's name is absent from `sys.modules`, confirming the loader cleaned up after the failure.
 def test_failed_load_leaves_no_cached_module(tmp_path: Path, clean_sys_modules: None) -> None:
     script = tmp_path / "_stage_import_boom_probe.py"
     script.write_text("raise RuntimeError('boom during import')\n")

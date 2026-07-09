@@ -30,6 +30,9 @@ def _profiles(n_species: int = 3, n_rho: int = 5) -> tuple[np.ndarray, np.ndarra
     return rho, density, temperature
 
 
+# A round-trip test for the polynomial fitter. It builds pressure data from known coefficients [3, -2, 0.5], fits a
+# degree-2 power series back to that data, and asserts the recovered coefficients match the originals. Recovering a
+# known analytical answer is a strong correctness check.
 def test_fit_power_series_recovers_known_polynomial() -> None:
     rho = np.linspace(0.0, 1.0, 6)
     s = rho**2
@@ -39,6 +42,10 @@ def test_fit_power_series_recovers_known_polynomial() -> None:
     assert_allclose(coeffs, coeffs_true, atol=1e-9)
 
 
+# Total pressure can be supplied directly, or reconstructed from temperature x density. This writes one file each way
+# (with matching inputs) and asserts `_load_total_pressure` returns the same total for both, that it equals the
+# species-summed pressure, and that a static profile reports no time index. Confirms the two supported input forms
+# agree.
 def test_load_total_pressure_temperature_density_matches_pressure(tmp_path: Path) -> None:
     rho, density, temperature = _profiles()
     pressure = density * temperature
@@ -54,6 +61,9 @@ def test_load_total_pressure_temperature_density_matches_pressure(tmp_path: Path
     assert idx_td is None and idx_p is None  # static profile has no resolved time index
 
 
+# For a time-resolved file, `_load_total_pressure` should be able to pick a specific time slice. This writes a
+# 2-time-step pressure, then asserts that `final_time=True` selects the last slice (time index 1) and `time_index=0`
+# selects the first, with the returned totals matching each slice's sum.
 def test_load_total_pressure_final_time_selects_last_slice(tmp_path: Path) -> None:
     rho, density, temperature = _profiles()
     slice0 = density * temperature
@@ -77,6 +87,12 @@ def test_load_total_pressure_missing_rho_raises(tmp_path: Path) -> None:
         fit_mod._load_total_pressure(bad, time_index=-1, final_time=False)
 
 
+# This is the feedback step that turns the fitted pressure back into a VMEC input file for the next loop iteration.
+# Starting from a committed template fixture, it writes a new file with the fitted coefficients and asserts the pressure
+# keys are set correctly (`PMASS_TYPE`, `PRES_SCALE`, and the `AM` coefficient line). The expected `AM` line is
+# hard-coded (not built by the writer's own formatter) so a bug in that formatter can't hide itself. It also asserts the
+# template's `AM` line was replaced in place (not duplicated) and that the committed fixture file itself is left
+# unmodified.
 def test_write_vmec_input_rewrites_pressure_keys(tmp_path: Path) -> None:
     coeffs = np.array([3.0, -2.0, 0.5])
     out = tmp_path / "vmec_out.txt"

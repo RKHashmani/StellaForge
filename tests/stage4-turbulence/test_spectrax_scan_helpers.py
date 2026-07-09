@@ -21,6 +21,10 @@ scan = load_stage_module("stages/stage4-turbulence/spectrax_gk_radial_scan.py")
 
 # --- _spectrax_flux_to_neopax_units ---
 
+# `_spectrax_flux_to_neopax_units` converts a dimensionless (gyro-Bohm) flux into physical units. The heat flux Q
+# carries one extra factor of temperature (in eV) compared to the particle flux Gamma. Converting the same raw value
+# both ways, this asserts their ratio Q/Gamma equals the temperature expressed in eV (2 keV = 2000 eV), a cheap way to
+# check the extra-temperature factor without pinning the full absolute scale.
 def test_flux_units_q_over_gamma_is_temperature_in_ev() -> None:
     kwargs = dict(density_ref_state=0.5, temperature_ref_keV=2.0, mass_ref_mp=2.0, rho_star_physical=0.01)
     gamma = scan._spectrax_flux_to_neopax_units(3.0, kind="Gamma", **kwargs)
@@ -28,6 +32,10 @@ def test_flux_units_q_over_gamma_is_temperature_in_ev() -> None:
     assert_allclose(q / gamma, 2.0 * 1.0e3, rtol=1e-12)  # Q carries an extra factor of T expressed in eV
 
 
+# The absolute-value counterpart to the ratio test above. It recomputes the full expected Gamma from first principles
+# (reference density x thermal speed x rho_star squared, with the thermal speed built from physical constants) and
+# asserts the helper returns exactly that. Because the ratio tests only compare fluxes to each other, only this one
+# would catch a silent error in the overall unit convention.
 def test_flux_units_absolute_scale_matches_reference_convention() -> None:
     # Absolute pin for the reference-species convention: Gamma = gamma_hat * n_ref * vth_ref * rho_star^2
     # with vth_ref = sqrt(2 T e / m). Here gamma_hat=3, n=0.5e20 m^-3, T=2000 eV, mass=2 m_p,
@@ -41,6 +49,8 @@ def test_flux_units_absolute_scale_matches_reference_convention() -> None:
     assert_allclose(gamma, expected_gamma, rtol=1e-12)
 
 
+# Gyro-Bohm fluxes scale with the square of `rho_star`. Converting the same raw flux at two rho_star values differing by
+# 2x (0.01 vs 0.02), this asserts the results differ by 4x (2 squared), confirming the rho_star-squared dependence.
 def test_flux_units_scale_as_rho_star_squared() -> None:
     base = dict(density_ref_state=1.0, temperature_ref_keV=1.0, mass_ref_mp=1.0, kind="Gamma")
     small = scan._spectrax_flux_to_neopax_units(1.0, rho_star_physical=0.01, **base)
@@ -73,6 +83,9 @@ def _expand_inputs(n_species: int = 3, n: int = 2) -> dict:
     }
 
 
+# `_expand_axis_zero_if_needed` re-inserts the magnetic-axis point (rho = 0) that the scan skipped, but only when the
+# run manifest describes it. With an empty manifest (no `source_rho`), it should do nothing: this asserts the arrays
+# come back unchanged, still length 2 on the radius axis.
 def test_expand_passthrough_without_source_rho() -> None:
     arrays = _expand_inputs()
     out = scan._expand_axis_zero_if_needed({}, **arrays)
@@ -82,6 +95,10 @@ def test_expand_passthrough_without_source_rho() -> None:
     assert out[9].shape == arrays["gamma_neopax"].shape
 
 
+# The happy path where all guards pass. Given a manifest whose `source_rho` is the scanned radii plus a leading 0, it
+# prepends the axis point everywhere: the radial coordinate becomes [0, 0.5, 1.0], the physical radius is `a_minor *
+# rho`, toroidal flux is `rho^2`, `Er` is taken from the manifest, and the flux arrays gain a new zero-filled axis
+# column while their existing columns are preserved. Each assertion checks one of those reconstructed quantities.
 def test_expand_prepends_axis_zero() -> None:
     manifest = {"source_rho": [0.0, 0.5, 1.0], "source_er": [0.0, 1.5, 3.0], "geometry": {"a_minor": 2.0}}
     arrays = _expand_inputs()  # rho size 2, rho_index [1, 2]
@@ -99,6 +116,9 @@ def test_expand_prepends_axis_zero() -> None:
     assert_allclose(full_q[:, 1:], arrays["q_neopax"], rtol=1e-12)
 
 
+# The radius axis still expands, but here the manifest's `source_er` is the wrong length for the expanded axis. Rather
+# than misalign the electric field with the wrong radii, the helper fills `Er` with zeros. This asserts the radius axis
+# expanded correctly while `Er` came back all zeros.
 def test_expand_er_zero_filled_on_source_er_size_mismatch() -> None:
     manifest = {"source_rho": [0.0, 0.5, 1.0], "source_er": [0.0, 1.5], "geometry": {"a_minor": 2.0}}
     arrays = _expand_inputs()  # rho size 2, rho_index [1, 2]
@@ -109,6 +129,10 @@ def test_expand_er_zero_filled_on_source_er_size_mismatch() -> None:
     assert_allclose(out[4], 0.0)
 
 
+# Expansion is only safe if the scanned surfaces were exactly indices [1, 2] (i.e. the axis at index 0 really was the
+# only one skipped). Here `rho_index` is [0, 1] instead, so a guard trips and the helper refuses to expand. This asserts
+# the arrays are returned unchanged (radius axis stays 2), protecting against inserting an axis point when the data
+# doesn't line up.
 def test_expand_passthrough_on_index_mismatch() -> None:
     manifest = {"source_rho": [0.0, 0.5, 1.0], "geometry": {"a_minor": 2.0}}
     arrays = _expand_inputs()

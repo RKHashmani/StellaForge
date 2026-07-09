@@ -22,6 +22,9 @@ scan = load_stage_module("stages/stage3-neoclassical/sfincs_jax_radial_scan.py")
 
 # --- _choose_radius_indices ---
 
+# `_choose_radius_indices` picks which flux surfaces the scan will solve. With no options given, it should skip the
+# magnetic axis (rho = 0, at index 0) because a solve there is rarely useful. Given 5 radii, this asserts it returns
+# indices [1, 2, 3, 4], i.e. everything except the axis.
 def test_choose_radius_default_skips_axis() -> None:
     rho = np.linspace(0.0, 1.0, 5)  # index 0 is rho = 0
     idxs = scan._choose_radius_indices(rho, explicit=None, rho_min=None, rho_max=None, num_radii=None)
@@ -40,12 +43,17 @@ def test_choose_radius_explicit_out_of_range_raises() -> None:
         scan._choose_radius_indices(rho, explicit=[7], rho_min=None, rho_max=None, num_radii=None)
 
 
+# `num_radii` thins the candidate surfaces down to a smaller evenly-spaced sample. After skipping the axis the
+# candidates are [1, 2, 3, 4]; asking for 2 should keep the two endpoints, so this asserts the result is [1, 4]. This
+# lets a user run a cheaper, coarser scan.
 def test_choose_radius_num_radii_subsamples() -> None:
     rho = np.linspace(0.0, 1.0, 5)  # candidates after axis skip: [1, 2, 3, 4]
     idxs = scan._choose_radius_indices(rho, explicit=None, rho_min=None, rho_max=None, num_radii=2)
     assert idxs == [1, 4]  # endpoints of the candidate span
 
 
+# The rho range is 0 to 1, so a `rho_min` of 2.0 filters out every surface. Rather than return an empty list (which
+# would make the scan do nothing), this asserts it raises ValueError so the impossible filter is reported clearly.
 def test_choose_radius_empty_filter_raises() -> None:
     rho = np.linspace(0.0, 1.0, 5)
     with pytest.raises(ValueError):
@@ -66,6 +74,10 @@ SNAPSHOT_MODULES = [
 ]
 
 
+# `_build_standard_analytical_snapshot` synthesises test profiles (density, temperature, etc.) from config, used when no
+# real upstream profiles are available. This builds a 3-species, 5-radius snapshot and asserts every array has the
+# expected shape and that a static (non-time-resolved) snapshot has no time value. Parametrized to run against both
+# Stage 3's and Stage 4's copy of the function.
 @pytest.mark.parametrize("module", SNAPSHOT_MODULES)
 def test_snapshot_shapes(module: ModuleType) -> None:
     snap = module._build_standard_analytical_snapshot({}, n_species=3, n_radial=5)
@@ -86,6 +98,9 @@ def test_snapshot_core_and_edge_values(module: ModuleType) -> None:
     assert_allclose(snap.temperature[:, -1], 0.7, rtol=1e-12)
 
 
+# The ion densities are set as fractions of the electron density (species 0). Configuring deuterium at 0.6 and tritium
+# at 0.4, this asserts species 1's density equals 0.6x and species 2's equals 0.4x the electron density at every radius,
+# confirming the ratio config is applied correctly.
 @pytest.mark.parametrize("module", SNAPSHOT_MODULES)
 def test_snapshot_species_density_ratios(module: ModuleType) -> None:
     cfg = {"profiles": {"deuterium_ratio": 0.6, "tritium_ratio": 0.4}}

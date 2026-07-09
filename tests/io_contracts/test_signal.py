@@ -17,10 +17,15 @@ def test_valid_signal_passes() -> None:
     assert validate_signal({"converged": True, "halt": False}) is None
 
 
+# Gives `converged` the integer 1 instead of a real bool and asserts the inner checker returns exactly the "must be
+# bool, got int" problem. Checking the full returned list (with ==) pins both the wording and that no other spurious
+# problems appear.
 def test_check_signal_wrong_type() -> None:
     assert _check_signal({"converged": 1, "halt": False}) == ["key 'converged' must be bool, got int"]
 
 
+# Passes a list instead of a dict and asserts the checker returns the single "signal must be a dict" problem, confirming
+# it rejects the wrong top-level type before checking any keys.
 def test_check_signal_not_a_dict() -> None:
     assert _check_signal(["converged", "halt"]) == ["signal must be a dict, got list"]
 
@@ -30,6 +35,9 @@ def test_validate_signal_raises_on_missing_key() -> None:
         validate_signal({"converged": True})
 
 
+# Passes an empty dict (both required keys missing) and asserts the raised error message mentions both `converged` and
+# `halt`. This proves the validator reports every problem at once rather than stopping at the first one. `exc.value` is
+# the captured exception object.
 def test_validate_signal_reports_all_problems() -> None:
     with pytest.raises(ContractError) as exc:
         validate_signal({})

@@ -21,6 +21,9 @@ def test_parser_accepts_wout_and_output() -> None:
     assert str(args.output) == "b.nc"
 
 
+# Both flags are required, because the Snakefile always passes them. argparse exits the program (raising SystemExit)
+# when a required flag is missing, so this asserts SystemExit is raised both with no flags at all and with only
+# `--wout`, confirming neither can be omitted.
 def test_parser_requires_both_flags() -> None:
     parser = run_boozer.build_parser()
     with pytest.raises(SystemExit):

@@ -98,6 +98,10 @@ def baseline_artifacts() -> dict[str, list[Path]]:
     return _discover_baseline_artifacts()
 
 
+# Runs each of the five real file validators against the actual baseline outputs found on disk.
+# `@pytest.mark.parametrize` turns this into five separate test cases (one per artifact/validator pair). If no baseline
+# file exists for an artifact (e.g. on CI, where outputs/ is gitignored), that case skips with a clear reason; otherwise
+# a validator raising ContractError signals real output drift.
 @pytest.mark.parametrize(
     ("key", "validator"),
     _ARTIFACT_VALIDATORS,

@@ -50,6 +50,10 @@ def _write_config(tmp_path: Path) -> Path:
     return path
 
 
+# `run_forward_pass` should shell out to Snakemake with a specific command. Rather than actually run it, this uses
+# monkeypatch to replace `subprocess.run` with a fake that records the command it was handed, then asserts the exact
+# argument list (target, cores, config file, dir overrides) and that it runs in the repo root with `check=True` (so a
+# failing Snakemake call raises).
 def test_run_forward_pass_builds_snakemake_argv(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
 
@@ -75,6 +79,9 @@ def test_run_forward_pass_builds_snakemake_argv(monkeypatch: pytest.MonkeyPatch)
     assert captured["kwargs"]["check"] is True
 
 
+# Checks input validation and its ordering. It runs `main()` with `--max-iters 0` and a config path that doesn't exist.
+# The test asserts it raises ValueError about max-iters (not a file-not-found error), proving the loop-count guard runs
+# before the config is ever read.
 def test_main_rejects_nonpositive_max_iters(monkeypatch: pytest.MonkeyPatch) -> None:
     # A nonexistent --config pins the ordering: the max-iters guard must fire before any
     # config read, so main() raises ValueError here rather than FileNotFoundError.
@@ -83,6 +90,10 @@ def test_main_rejects_nonpositive_max_iters(monkeypatch: pytest.MonkeyPatch) -> 
         ouroboros.main()
 
 
+# Verifies the "ouroboros" feedback: each iteration should start from the previous iteration's evolved boundary. It
+# monkeypatches the two file-touching helpers (so no solver runs, but a signal file is still written), records which
+# boundary file each iteration is seeded from, and asserts iteration 1 seeds from the base input while iteration 2 seeds
+# from iteration 1's feedback output.
 def test_loop_seeds_from_previous_feedback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
     config = yaml.safe_load(config_path.read_text())
@@ -111,6 +122,10 @@ def test_loop_seeds_from_previous_feedback(monkeypatch: pytest.MonkeyPatch, tmp_
     assert seeded == [base_p["s1_input"], iter1_p["s1_feedback"]]
 
 
+# The loop should stop early when a run reports it has converged or been told to halt. `@pytest.mark.parametrize` runs
+# this twice, once with a `halt` signal and once with a `converged` signal. Each fake run writes that signal, and the
+# test asserts only one iteration happened even though max-iters was 3, proving the terminal signal short-circuits the
+# loop.
 @pytest.mark.parametrize("signal", [{"halt": True}, {"converged": True}])
 def test_loop_short_circuits_on_terminal_signal(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, signal: dict

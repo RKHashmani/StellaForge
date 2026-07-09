@@ -22,6 +22,9 @@ def _static(value: float, n_species: int = 3, n_rho: int = 5) -> np.ndarray:
     return np.full((n_species, n_rho), value)
 
 
+# `pressure_converged` decides whether the loop has settled by comparing the last two time slices of the pressure
+# profile. A static (single-slice) profile has no change to measure, so convergence cannot be confirmed: this writes
+# such a file and asserts the function returns False.
 def test_pressure_converged_false_for_static_profile(tmp_path: Path) -> None:
     rho = np.linspace(0.0, 1.0, 5)
     f = write_transport_solution(tmp_path / "static.h5", rho=rho, pressure=_static(2.0))
@@ -44,6 +47,9 @@ def test_pressure_converged_false_for_large_change(tmp_path: Path) -> None:
     assert not post.pressure_converged(f, rel_tol=1e-2)
 
 
+# `build_signal` produces the `{converged, halt}` dict the loop reads. A non-physical (non-positive) total pressure
+# means the run has gone bad and should stop. This forces the total pressure negative at one radius and asserts the
+# signal is halt=True (and converged=False), so the loop aborts.
 def test_build_signal_halts_on_nonpositive_pressure(tmp_path: Path) -> None:
     rho = np.linspace(0.0, 1.0, 5)
     pressure = _static(2.0)

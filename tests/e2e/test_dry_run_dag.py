@@ -39,6 +39,9 @@ def _dry_run(tmp_path: Path, targets: list[str], config_overrides: list[str]) ->
     )
 
 
+# This runs the default forward pass and asserts it plans successfully (exit code 0), that all five stage rules are
+# scheduled, and that the post-processing rule is NOT scheduled, because the default target is a pure forward pass with
+# no loop-closing step. This catches Snakefile wiring/parse errors without Docker.
 def test_forward_pass_dag_dry_run(tmp_path: Path) -> None:
     result = _dry_run(tmp_path, targets=[], config_overrides=[])
     output = result.stdout + result.stderr
@@ -48,6 +51,9 @@ def test_forward_pass_dag_dry_run(tmp_path: Path) -> None:
     assert "stage5_post_processing" not in output  # rule all is a pure forward pass
 
 
+# When you explicitly ask Snakemake to build the convergence-signal file (the loop-closing target), the post-processing
+# rule SHOULD be pulled in. This resolves that target path, dry-runs with it as the goal, and asserts
+# `stage5_post_processing` now appears in the plan, confirming the loop-closing rule wires up on demand.
 def test_s5_signal_target_schedules_post_processing(tmp_path: Path) -> None:
     config = yaml.safe_load((REPO_ROOT / "inputs/quick_run/config.yaml").read_text())
     s5_signal = resolve_pipeline_paths(config, output_dir=f"{tmp_path}/out")["s5_signal"]
@@ -59,6 +65,9 @@ def test_s5_signal_target_schedules_post_processing(tmp_path: Path) -> None:
     assert "stage5_post_processing" in output, output
 
 
+# The Snakefile validates the `device` config at parse time, before any job runs. This dry-runs with `device=bogus` and
+# asserts the run fails (non-zero exit) with a message saying device must be 'cpu' or 'gpu', confirming a bad value is
+# caught early rather than deep into an execution.
 def test_invalid_device_fails_at_parse(tmp_path: Path) -> None:
     result = _dry_run(tmp_path, targets=[], config_overrides=["device=bogus"])
     output = result.stdout + result.stderr

@@ -42,6 +42,10 @@ def _prepare(tmp_path: Path) -> tuple[Path, Path]:
     return template, resolved
 
 
+# NEOPAX (Stage 5) is configured by a TOML file, not CLI flags. `prepare_neopax_config` writes a copy of the template
+# into the Stage 5 output dir and rewrites its five input-path fields so each points at the right upstream artifact,
+# relative to that copy's own location. This reads the copy and asserts all five fields now hold the expected
+# `../stageN/...` relative path, and that the output dir field resolves to `./` (the copy's own directory).
 def test_rewrites_five_paths_relative_and_quoted(tmp_path: Path) -> None:
     _, resolved = _prepare(tmp_path)
     text = resolved.read_text()  # also asserts the parent dir was created
@@ -53,6 +57,9 @@ def test_rewrites_five_paths_relative_and_quoted(tmp_path: Path) -> None:
     assert 'transport_output_dir = "./"' in text
 
 
+# The rewrite must happen on the copy, never the shared template. After running the same preparation, this reads the
+# original template file back and asserts its contents are byte-for-byte unchanged, proving the committed template is
+# never mutated by a run.
 def test_template_left_unmodified(tmp_path: Path) -> None:
     template, _ = _prepare(tmp_path)
     assert template.read_text() == _TEMPLATE

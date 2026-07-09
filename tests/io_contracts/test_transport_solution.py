@@ -45,12 +45,17 @@ def test_missing_er_flagged() -> None:
     assert "missing required field 'Er'" in _check_transport_solution(data)
 
 
+# `Er` is a per-radius field with no species axis, so it must have one fewer dimension than the species-resolved
+# `density`. This wrongly gives `Er` a (species, radius) 2D shape and asserts the checker flags that `Er`'s rank should
+# be "one less" than density's.
 def test_er_with_species_axis_flagged() -> None:
     data = _valid_data(n_species=3, n_rho=5)
     data["Er"] = np.ones((3, 5))  # wrongly given a species axis
     assert any("Er" in problem and "one less" in problem for problem in _check_transport_solution(data))
 
 
+# Every profile's last axis must span the radial grid `rho`. This gives `density` a trailing axis of 4 while `rho` has
+# length 5, and asserts the checker flags the "trailing axis" mismatch.
 def test_rho_axis_mismatch_flagged() -> None:
     data = _valid_data(n_rho=5)
     data["density"] = np.ones((3, 4))  # trailing axis 4 != len(rho) 5
@@ -63,12 +68,15 @@ def test_nonfinite_density_flagged() -> None:
     assert "'density' contains non-finite values" in _check_transport_solution(data)
 
 
+# `rho` is the 1D radial coordinate. This gives it a 2D shape and asserts the checker flags that `rho` "must be 1D".
 def test_rho_not_1d_flagged() -> None:
     data = _valid_data()
     data["rho"] = np.ones((2, 3))  # rho must be a 1D radial coordinate
     assert any("rho" in problem and "must be 1D" in problem for problem in _check_transport_solution(data))
 
 
+# `pressure` is optional, but when present it must share `density`'s rank (static vs time-resolved). This gives a 3D
+# (time-resolved) pressure while density is 2D (static) and asserts the checker flags the ndim mismatch between the two.
 def test_pressure_rank_mismatch_flagged() -> None:
     data = _valid_data(n_species=3, n_rho=5)
     data["pressure"] = np.ones((4, 3, 5))  # 3D pressure while density is 2D
@@ -84,6 +92,9 @@ def test_er_trailing_axis_mismatch_flagged() -> None:
     assert any("Er" in problem and "trailing axis" in problem for problem in _check_transport_solution(data))
 
 
+# Sets up a time-resolved solution (density/temperature are 3D and `Er` 2D over 4 time steps) but makes the time axis
+# `ts` length 3 instead of 4. Asserts the checker flags that `ts`'s length disagrees with the profiles' time axis, so
+# the timestamps and the data stay in sync.
 def test_ts_length_mismatch_flagged() -> None:
     n_time, n_species, n_rho = 4, 3, 5
     data = _valid_data(n_species=n_species, n_rho=n_rho)
@@ -101,6 +112,8 @@ def test_valid_file_passes(tmp_path: Path) -> None:
     assert validate_transport_solution(written) is None
 
 
+# End-to-end failure path: writes a real file omitting the `er` argument (so `Er` is absent) and asserts
+# `validate_transport_solution` raises a ContractError mentioning `Er`.
 def test_file_missing_er_raises(tmp_path: Path) -> None:
     rho = np.linspace(0.0, 1.0, 5)
     profile = np.ones((3, 5))

@@ -37,12 +37,17 @@ def test_missing_bmnc_flagged() -> None:
     assert "missing required field 'bmnc_b'" in _check_boozmn(data)
 
 
+# Gives `bmnc_b` a mode axis of 2 while the mode-number array `ixm_b` says there are 4 modes. Asserts the checker flags
+# this "mode axis" mismatch, since the coefficients and their mode list must line up.
 def test_mode_axis_mismatch_flagged() -> None:
     data = _valid(n_surf=3, mnboz=4)
     data["bmnc_b"] = np.ones((3, 2))  # mode axis 2 != mnboz 4 (from ixm_b)
     assert any("bmnc_b" in problem and "mode axis" in problem for problem in _check_boozmn(data))
 
 
+# The two mode-number arrays `ixm_b` and `ixn_b` must have the same length. This shrinks `ixm_b` to length 2 (which sets
+# the expected mode count to 2), leaving `ixn_b` at length 4, and asserts the checker complains about `ixn_b` being
+# inconsistent.
 def test_mode_array_length_mismatch_flagged() -> None:
     data = _valid(n_surf=3, mnboz=4)
     data["ixm_b"] = np.arange(2)  # sets mnboz to 2, so ixn_b length 4 is inconsistent
@@ -55,6 +60,8 @@ def test_nonfinite_bmnc_flagged() -> None:
     assert "'bmnc_b' contains non-finite values" in _check_boozmn(data)
 
 
+# `phi_b` is optional, but when present it must be a 1D per-surface profile. This supplies a 2D `phi_b` and asserts the
+# checker flags it as not 1D, showing optional fields are still shape-checked when provided.
 def test_present_2d_phi_b_flagged() -> None:
     data = _valid()
     data["phi_b"] = np.ones((3, 2))  # optional, but a 2D array is drift and must be flagged
@@ -71,6 +78,8 @@ def test_valid_file_passes(tmp_path: Path) -> None:
     assert validate_boozmn(write_boozmn(tmp_path / "b.nc")) is None
 
 
+# End-to-end failure path: writes a real Boozer file with `bmnc_b` omitted and asserts `validate_boozmn` raises a
+# ContractError mentioning `bmnc_b`, confirming bad files are rejected.
 def test_file_missing_bmnc_raises(tmp_path: Path) -> None:
     written = write_boozmn(tmp_path / "b.nc", omit=("bmnc_b",))
     with pytest.raises(ContractError, match="bmnc_b"):

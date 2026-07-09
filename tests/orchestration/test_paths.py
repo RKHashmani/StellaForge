@@ -35,6 +35,10 @@ EXPECTED_KEYS = {
 }
 
 
+# `resolve_pipeline_paths` turns one run's config into a dict of every concrete file path the pipeline uses. The `paths`
+# argument is a fixture (defined in conftest.py) holding that dict for the committed quick_run config. This asserts the
+# dict has exactly the expected set of keys and pins each stage's input/output path to its precise string, so an
+# accidental path change is caught.
 def test_quick_run_paths_match_contract(paths: dict) -> None:
     assert set(paths) == EXPECTED_KEYS
     assert paths["s1_input"] == "inputs/quick_run/vmec_input.HSX_vacuum_ns201_quickrun"
@@ -49,6 +53,9 @@ def test_quick_run_paths_match_contract(paths: dict) -> None:
     assert paths["s5_signal"] == "outputs/quick_run/stage5_post_processing/converge_status.json"
 
 
+# Pins the two paths that are derived for generated artifacts rather than user inputs: the path-resolved NEOPAX config
+# copy, and the evolved Stage 1 boundary the closed loop feeds back. Both must land under the output tree, not the input
+# tree.
 def test_quick_run_generated_paths(paths: dict) -> None:
     assert paths["s5_resolved_config"] == "outputs/quick_run/stage5_transport/common_input_updated.toml"
     # The evolved Stage 1 boundary the loop feeds back lives under the post-processing dir.
@@ -59,6 +66,10 @@ def test_no_unsubstituted_run_name(paths: dict) -> None:
     assert all("{run_name}" not in value for value in paths.values())
 
 
+# Callers (like the closed-loop driver) can override the input/output base directories. The `config` fixture is the
+# quick_run config; here it is resolved with explicit sandbox dirs, and the test asserts those override the config's own
+# dirs and that every derived path is rebuilt under them. This is what lets each loop iteration write into its own
+# folder.
 def test_dir_overrides_take_precedence(config: dict) -> None:
     p = resolve_pipeline_paths(config, input_dir="/sandbox/in", output_dir="/sandbox/out")
     assert p["input_dir"] == "/sandbox/in"
@@ -68,6 +79,10 @@ def test_dir_overrides_take_precedence(config: dict) -> None:
     assert p["s5_resolved_config"].startswith("/sandbox/out/stage5_transport/")
 
 
+# Instead of the real quick_run config, this builds a tiny handmade config with a `run_name` of "demo" and simple
+# template strings, then checks the `{run_name}` substitution and the input-vs-output directory routing in isolation.
+# Testing the templating on a minimal input makes the expected results easy to read and independent of the committed
+# config.
 def test_templating_in_isolation() -> None:
     cfg = {
         "run_name": "demo",

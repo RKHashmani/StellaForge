@@ -38,6 +38,9 @@ def cmd(**overrides) -> str:
     return radial_scan_cmd(**base)
 
 
+# `radial_scan_cmd` builds the shell command the Snakefile runs for Stage 4. With an empty config and cpu device, this
+# pins the exact base command string, including the two geometry-input overrides and the literal `{input.*}`
+# placeholders Snakemake fills in with real paths at run time.
 def test_base_command_with_empty_config() -> None:
     # Empty config + cpu emits exactly the static base parts; this equality also
     # pins the literal {input.*} placeholders (including the two geometry
@@ -54,6 +57,9 @@ def test_base_command_with_empty_config() -> None:
     )
 
 
+# Optional flags appear only when set. This also checks a rename: the config key `t_max` is emitted as the `--t-final`
+# flag. It asserts the two set values appear (with the rename applied), the None-valued key is omitted, and a key absent
+# from the config is omitted.
 def test_only_non_none_optionals_appear() -> None:
     out = cmd(stage_cfg={"t_max": 250.0, "ntheta": 16, "ny": None})
     assert "--t-final 250.0" in out          # t_max is renamed to --t-final
@@ -62,6 +68,9 @@ def test_only_non_none_optionals_appear() -> None:
     assert "--profiles-source" not in out    # absent key -> omitted
 
 
+# Boolean toggles are tri-state: True emits `--flag`, False emits `--no-flag`, absent emits neither. Parametrized over
+# Stage 4's four toggles, this verifies all three cases. It compares whole tokens so a short flag like `--plot` isn't
+# falsely matched inside `--no-plot` or `--plot-run-heat-traces`.
 @pytest.mark.parametrize(
     "key, on, off",
     [
@@ -88,11 +97,11 @@ def test_gpu_ids_only_on_gpu() -> None:
     assert "--gpu-ids" not in cmd(stage_cfg={}, device="gpu")   # gpu but no ids
 
 
+# A drift guard. The exact-string tests only check the helper against itself; this checks it against the real stage
+# script. It configures every optional and toggle (including the `t_max` -> `--t-final` rename), strips out the
+# Snakemake placeholders, and feeds the resulting flags into the stage script's own argparse parser (`build_parser`). If
+# the script ever renames or drops a flag, argparse exits (`sys.exit(2)`) and this test fails, catching the mismatch.
 def test_emitted_flags_parse_with_stage_script() -> None:
-    # Cross-check: every flag radial_scan_cmd can emit must be one the stage script's own
-    # parser accepts. Populate all optionals/toggles (t_max emits as --t-final), then feed the
-    # argument vector to the script's build_parser. A helper flag the script renamed or dropped
-    # makes argparse sys.exit(2); this catches helper-vs-script drift the exact-string tests cannot.
     stage_cfg = {
         "profiles_source": "analytical",
         "neopax_result": "outputs/quick_run/stage5_transport/transport_solution.h5",

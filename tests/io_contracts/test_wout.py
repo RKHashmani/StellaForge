@@ -42,6 +42,9 @@ def test_missing_rmnc_flagged() -> None:
     assert "missing required field 'rmnc'" in _check_wout(data)
 
 
+# Gives `bmnc` a mode axis of 3 while the Nyquist mode-number array `xm_nyq` says there should be 5 modes. Asserts the
+# checker flags this "mode axis" mismatch, since a coefficient array and the mode list that indexes it must agree in
+# length.
 def test_nyq_mode_axis_mismatch_flagged() -> None:
     data = _valid(ns=4, mnmax=3, mnmax_nyq=5)
     data["bmnc"] = np.ones((4, 3))  # mode axis 3 != mnmax_nyq 5 (from xm_nyq)
@@ -54,6 +57,8 @@ def test_nonfinite_rmnc_flagged() -> None:
     assert "'rmnc' contains non-finite values" in _check_wout(data)
 
 
+# Makes the 1D radial profile `phi` length 3 while the number of radial surfaces `ns` is 4 (inferred from `iotas`).
+# Asserts the checker flags the length mismatch, since every per-surface profile must have one value per surface.
 def test_1d_profile_length_mismatch_flagged() -> None:
     data = _valid(ns=4, mnmax=3, mnmax_nyq=5)
     data["phi"] = np.ones(3)  # length 3 != ns 4 (ns inferred from iotas)
@@ -78,6 +83,9 @@ def test_missing_nfp_flagged() -> None:
     assert "missing required field 'nfp'" in _check_wout(data)
 
 
+# The minor radius can be supplied either directly as `Aminor_p` or derived from `volume_p` + `Rmajor_p`. This removes
+# `Aminor_p` when the other two are also absent, and asserts the checker reports that none of the accepted ways to give
+# the minor radius are present.
 def test_missing_minor_radius_flagged() -> None:
     data = _valid()
     data["Aminor_p"] = None  # volume_p / Rmajor_p are absent from the valid dict too
@@ -87,10 +95,15 @@ def test_missing_minor_radius_flagged() -> None:
     )
 
 
+# `write_wout` writes a real, valid NetCDF file to a temporary directory, then the public `validate_wout` reads it back
+# and returns None (no exception), proving the file-reading layer accepts a good file.
 def test_valid_file_passes(tmp_path: Path) -> None:
     assert validate_wout(write_wout(tmp_path / "wout.nc")) is None
 
 
+# The end-to-end failure path. Writes a real NetCDF file but omits the `xm` variable, then asserts `validate_wout`
+# raises a ContractError whose message mentions `xm`. `pytest.raises` fails the test if no such error is raised, so this
+# confirms bad files are rejected loudly, not silently.
 def test_file_missing_xm_raises(tmp_path: Path) -> None:
     written = write_wout(tmp_path / "wout.nc", omit=("xm",))
     with pytest.raises(ContractError, match="xm"):

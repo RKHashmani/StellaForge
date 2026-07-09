@@ -31,6 +31,8 @@ def test_valid_inner_passes() -> None:
     assert _check_neopax_fluxes(data, species, attrs) == []
 
 
+# The Stage 4 writer always emits `Upar` (parallel flow) as all zeros, so a non-zero value signals a wrong or mislabeled
+# array. This sets `Upar` to all ones and asserts the checker flags that it must be all zeros.
 def test_nonzero_upar_flagged() -> None:
     data, species, attrs = _valid()
     data["Upar"] = np.ones((3, 5))
@@ -42,6 +44,8 @@ def test_missing_meta_species_flagged() -> None:
     assert "missing required field 'meta/species_names'" in _check_neopax_fluxes(data, None, attrs)
 
 
+# The contract pins the exact expected unit strings. This sets `particle_flux_units` to a bogus value and asserts the
+# checker flags it, confirming units must match, not just be present.
 def test_wrong_units_flagged() -> None:
     data, species, attrs = _valid()
     attrs["particle_flux_units"] = "wrong"
@@ -60,6 +64,8 @@ def test_nonfinite_q_flagged() -> None:
     assert "'Q' contains non-finite values" in _check_neopax_fluxes(data, species, attrs)
 
 
+# Writes a real, valid HDF5 flux file to a temp directory and asserts the public `validate_neopax_fluxes` reads it and
+# returns None (no error).
 def test_valid_file_passes(tmp_path: Path) -> None:
     rho = np.linspace(0.0, 1.0, 5)
     flux = np.ones((3, 5))
@@ -67,6 +73,8 @@ def test_valid_file_passes(tmp_path: Path) -> None:
     assert validate_neopax_fluxes(written) is None
 
 
+# End-to-end failure path: writes a real file whose `Upar` is all ones (should be zeros) and asserts
+# `validate_neopax_fluxes` raises a ContractError mentioning `Upar`.
 def test_file_nonzero_upar_raises(tmp_path: Path) -> None:
     rho = np.linspace(0.0, 1.0, 5)
     flux = np.ones((3, 5))

@@ -30,6 +30,9 @@ def test_multiple_keys() -> None:
     assert apply_assignments(text, {"a": "10", "c": "30"}) == "a = 10\nb = 2\nc = 30\n"
 
 
+# The value is inserted exactly as the caller supplies it, with no quoting added. Here a value that already includes
+# quotes and slashes (a quoted relative path) must land verbatim, which is exactly what Stage 5's prepare_neopax_config
+# relies on.
 def test_inserts_caller_value_verbatim() -> None:
     # The real prepare_neopax_config case: a caller-quoted relative path is inserted
     # exactly as given (no quoting added, quotes and slashes preserved).
@@ -37,11 +40,16 @@ def test_inserts_caller_value_verbatim() -> None:
     assert out == 'vmec_file = "../stage1_equilibrium/wout.nc"'
 
 
+# Only keys starting at the very beginning of a line (column 0) are rewritten. An indented `  a = 1` is left untouched,
+# so nested/section keys are never accidentally rewritten alongside the top-level ones this helper targets.
 def test_only_column_zero_keys_match() -> None:
     # Indented keys are left untouched (TOML top-level keys sit at column 0).
     assert apply_assignments("  a = 1\n", {"a": "9"}) == "  a = 1\n"
 
 
+# A key must match as a whole word, not as a prefix of a longer key. Rewriting `transport_output` must not touch a
+# `transport_output_dir` line, so this asserts the text is unchanged. Without this guarantee the helper could corrupt a
+# similarly-named neighbouring key.
 def test_prefix_collision_safety() -> None:
     # Rewriting "transport_output" must not touch "transport_output_dir".
     text = 'transport_output_dir = "old"\n'

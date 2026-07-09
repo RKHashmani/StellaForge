@@ -41,12 +41,17 @@ def test_missing_gamma_flagged() -> None:
     assert "missing required field 'Gamma'" in _check_sfincs_flux(data, {"axis_zero_padded": True})
 
 
+# Flux arrays are shaped (n_species, n_radii). This gives `Q` only 2 species-rows while `species_names` lists 3 species,
+# and asserts the checker flags the "species axis" mismatch.
 def test_species_axis_mismatch_flagged() -> None:
     data = _valid_data(n_species=3, n_radii=5)
     data["Q"] = np.ones((2, 5))  # 2 species but species_names has 3
     assert any("Q" in problem and "species axis" in problem for problem in _check_sfincs_flux(data, {"axis_zero_padded": True}))
 
 
+# Passes valid data but an empty attributes dict (`{}`), so the required root attribute `axis_zero_padded` is absent,
+# and asserts the checker reports it missing. Shows that file-level metadata, not just datasets, is part of the
+# contract.
 def test_missing_attr_flagged() -> None:
     assert "missing required root attribute 'axis_zero_padded'" in _check_sfincs_flux(_valid_data(), {})
 
@@ -64,6 +69,9 @@ def test_valid_file_passes(tmp_path: Path) -> None:
     assert validate_sfincs_flux(written) is None
 
 
+# End-to-end failure path: writes a real file whose flux radius axis (4) disagrees with the length of `rho` (5), and
+# asserts `validate_sfincs_flux` raises a ContractError mentioning "radius axis". Confirms shape drift is caught when
+# reading a real file, not just an in-memory dict.
 def test_file_wrong_radius_axis_raises(tmp_path: Path) -> None:
     rho = np.linspace(0.0, 1.0, 5)
     flux = np.ones((3, 4))  # radius axis 4 != len(rho) 5
