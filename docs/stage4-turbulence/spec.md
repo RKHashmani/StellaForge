@@ -86,6 +86,9 @@ Optional input fields:
 - `experts`: Advanced special-purpose controls.
      - Defaults: `fixed_mode=False, iky_fixed=None, ikx_fixed=None, dealias_kz=False`
 
+> [!NOTE]
+> **Radial-scan bridge defaults and reproducibility.** The defaults listed above are the raw SPECTRAX-GK config defaults. The `spectrax_gk_radial_scan.py` bridge that the Snakemake forward pass runs generates a runtime TOML per flux surface rather than using the template verbatim, and its `prepare` shaping defaults differ: `nx = 12`, `ny = 12`, `ntheta = 30` (theta points for the generated VMEC geometry), `t_max = 10.0`, `sample_stride = 50`, `diagnostics_stride = 1` (these are also the values set in the `stage4.spectrax_gk` block of the quick-run config). The bridge does **not** emit `random_seed` into the generated TOMLs, so the SPECTRAX-GK default seed is left implicit and runs are not explicitly re-seeded through this path (a known reproducibility gap).
+
 ### `GX` Inputs (Alternative)
 
 | Field | Type | Description | Source |
@@ -126,7 +129,28 @@ Reference: `stellarator_io_reference.tex`, Sections 3.9-3.10.
 | `heat_flux_s0` | 1D array (time) | Species-resolved particle flux time trace | Diagnostic | Normalization specified in toml file |
 | `particle_flux_s0` | 1D array (time) | Species-resolved particle flux time trace |  Diagnostic | Normalization specified in toml file |
 
-Output in CSV files, along with a json file that records the info for only last time step.
+Output in CSV files, along with a json file that records the info for only last time step. These are the per-surface diagnostics; in the Snakemake forward pass they are written under each surface's run directory and reduced into the aggregated files below.
+
+#### Aggregated forward-pass outputs (radial scan)
+
+The Snakemake forward pass runs the SPECTRAX-GK radial scan as a per-surface fan-out (`stage4_prepare` checkpoint, one `stage4_run_one` job per flux surface, then `stage4_collect`; see [Per-surface fan-out](../mvp-pipeline.md#per-surface-fan-out-stages-3-and-4)). The `collect` step reduces the per-surface diagnostics into two HDF5 files.
+
+**Forward-chain handoff:** `neopax_fluxes.h5` (HDF5), consumed by `NEOPAX` (Stage 5). Its schema is the exact subset checked by the in-repo contract validator `src/io_contracts.py` (`validate_neopax_fluxes`):
+
+| Dataset | Shape | Meaning |
+|---------|-------|---------|
+| `rho` | `(n_radii,)` | Normalized radial coordinate (sorted ascending) |
+| `r` | `(n_radii,)` | Physical minor-radius coordinate `r = a * rho` |
+| `Gamma` | `(n_species, n_radii)` | Turbulent particle flux in NEOPAX units |
+| `Q` | `(n_species, n_radii)` | Turbulent heat flux in NEOPAX units |
+| `Upar` | `(n_species, n_radii)` | Parallel flow; **always written as zeros** (this path supplies no parallel-flow channel) |
+| `meta/species_names` | `(n_species,)` | UTF-8 species labels (dataset inside the `meta` group) |
+
+Required `meta` group attributes (checked by the contract): `particle_flux_units = "m^-2 s^-1"`, `heat_flux_units = "eV m^-2 s^-1"`, and `minor_radius_m`. The `meta` group also carries `rho_star_source`, `radial_flux_coordinate`, `conversion`, `reference_species_name`, and `manifest` provenance attributes. The scan drops the magnetic-axis (`rho = 0`) surface, so when the manifest records a dropped axis the `collect` step re-inserts a zero-flux `rho = 0` column before writing, restoring a full profile for Stage 5.
+
+**Companion aggregate:** `flux_summary.h5` (HDF5) -- the richer scan summary the plots and audits build on, holding `rho`, `r`, `rho_index`, `torflux`, `Er`, `heat_flux_total`, `particle_flux_total`, the averaging-window bounds, a `species` group (`names`, `heat_flux`, `particle_flux`), and a `meta` group. It is not read by Stage 5.
+
+**Per-surface run tree** (under `outputs/<run>/stage4_turbulence/`): `manifest.json` at the stage directory records the surfaces, geometry, and profile provenance the `collect` step reduces over; `runs.csv` and `normalization_audit.csv` summarize the planned runs; `runs/rho_*/` holds one directory per surface (basenames like `rho_012_r0p4898`), each with the generated runtime `input.toml`, the local geometry cache `*.eik.nc`, `run.diagnostics.csv` (the per-surface time traces `collect` reads), and `run.summary.json`.
 
 The natural downstream contract is the same as `GX`: turbulent heat and particle flux (steady-state values).
 
@@ -213,8 +237,11 @@ pixi run stage-4-spectrax
 which executes something morally equivalent to:
 
 ```
-spectrax-gk run --config inputs/quick_run/HSX_vacuum_ns201_quickrun.toml --out outputs/quick_run/stage4_turbulence/hsx_run
+python -m spectraxgk.cli run --config inputs/quick_run/HSX_vacuum_ns201_quickrun.toml --out outputs/quick_run/stage4_turbulence/hsx_run
 ```
+
+> [!NOTE]
+> The pixi `stage-4-spectrax` task runs the all-in-one radial scan, which fans one `python -m spectraxgk.cli run` subprocess out per flux surface; the command above is the underlying per-surface invocation.
 
 **Input:** `outputs/quick_run/stage1_equilibrium/wout_HSX_vacuum_ns201_quickrun.nc` + `inputs/quick_run/HSX_vacuum_ns201_quickrun.toml`
 **Output:** `outputs/quick_run/stage4_turbulence/neopax_fluxes.h5` (+ `flux_summary.h5`, `manifest.json`, `runs.csv`)
