@@ -3,6 +3,11 @@
 ``snakemake -n`` parses the Snakefile and plans the job graph without running any
 container, so it catches wiring and parse-time errors with no Docker.
 
+Stages 3 and 4 fan out one job per flux surface behind ``prepare`` checkpoints, so
+a dry-run plans only up to each checkpoint plus the deferred ``collect`` gathers;
+the per-surface ``run_one`` layer enters the DAG only after a real ``prepare``
+writes its manifest.
+
 Overriding ``output_dir`` to a tmp dir keeps the Snakefile's parse-time
 ``prepare_neopax_config`` write, and every planned artifact path, out of the repo,
 and ``--runtime-source-cache-path`` keeps Snakemake's own runtime source cache under
@@ -22,7 +27,18 @@ import yaml
 from src.utils import resolve_pipeline_paths
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-FORWARD_RULES = ("stage1_vmec", "stage2_boozer", "stage3_sfincs", "stage4_spectrax", "stage5_neopax")
+FORWARD_RULES = (
+    "stage1_vmec",
+    "stage2_boozer",
+    "stage3_prepare",
+    "stage3_collect",
+    "stage4_prepare",
+    "stage4_collect",
+    "stage5_neopax",
+)
+# The per-surface run_one rules are gated behind the prepare checkpoints, so a plan built
+# before any manifest exists must not schedule them.
+DEFERRED_RULES = ("stage3_run_one", "stage4_run_one")
 
 
 def _dry_run(tmp_path: Path, targets: list[str], config_overrides: list[str]) -> subprocess.CompletedProcess:
@@ -39,9 +55,10 @@ def _dry_run(tmp_path: Path, targets: list[str], config_overrides: list[str]) ->
     )
 
 
-# This runs the default forward pass and asserts it plans successfully (exit code 0), that all five stage rules are
-# scheduled, and that the post-processing rule is NOT scheduled, because the default target is a pure forward pass with
-# no loop-closing step. This catches Snakefile wiring/parse errors without Docker.
+# This runs the default forward pass and asserts it plans successfully (exit code 0), that every stage rule visible
+# before the checkpoints run is scheduled (including both deferred collect gathers), and that the post-processing rule
+# is NOT scheduled, because the default target is a pure forward pass with no loop-closing step. This catches Snakefile
+# wiring/parse errors without Docker.
 def test_forward_pass_dag_dry_run(tmp_path: Path) -> None:
     result = _dry_run(tmp_path, targets=[], config_overrides=[])
     output = result.stdout + result.stderr
@@ -49,6 +66,11 @@ def test_forward_pass_dag_dry_run(tmp_path: Path) -> None:
     for rule in FORWARD_RULES:
         assert rule in output, f"rule {rule} not scheduled:\n{output}"
     assert "stage5_post_processing" not in output  # rule all is a pure forward pass
+    # Dry-run visibility ends at the unexecuted prepare checkpoints: the per-surface jobs
+    # must be absent and Snakemake must announce that the DAG grows after the checkpoints.
+    for rule in DEFERRED_RULES:
+        assert rule not in output, f"per-surface rule {rule} planned before its checkpoint ran:\n{output}"
+    assert "checkpoint jobs" in output, output
 
 
 # When you explicitly ask Snakemake to build the convergence-signal file (the loop-closing target), the post-processing
