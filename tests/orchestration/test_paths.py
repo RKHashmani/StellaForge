@@ -30,6 +30,8 @@ EXPECTED_KEYS = {
     "stage4_dir",
     "stage5_dir",
     "stage5_post_dir",
+    "stage3_manifest",
+    "stage4_manifest",
     "s5_resolved_config",
     "s1_feedback",
 }
@@ -53,10 +55,12 @@ def test_quick_run_paths_match_contract(paths: dict) -> None:
     assert paths["s5_signal"] == "outputs/quick_run/stage5_post_processing/converge_status.json"
 
 
-# Pins the two paths that are derived for generated artifacts rather than user inputs: the path-resolved NEOPAX config
-# copy, and the evolved Stage 1 boundary the closed loop feeds back. Both must land under the output tree, not the input
-# tree.
+# Pins the paths that are derived for generated artifacts rather than user inputs: the Stage 3/4 per-surface scan
+# manifests, the path-resolved NEOPAX config copy, and the evolved Stage 1 boundary the closed loop feeds back. All must
+# land under the output tree, not the input tree.
 def test_quick_run_generated_paths(paths: dict) -> None:
+    assert paths["stage3_manifest"] == "outputs/quick_run/stage3_neoclassical/manifest.json"
+    assert paths["stage4_manifest"] == "outputs/quick_run/stage4_turbulence/manifest.json"
     assert paths["s5_resolved_config"] == "outputs/quick_run/stage5_transport/common_input_updated.toml"
     # The evolved Stage 1 boundary the loop feeds back lives under the post-processing dir.
     assert paths["s1_feedback"] == "outputs/quick_run/stage5_post_processing/vmec_input.HSX_vacuum_ns201_quickrun"

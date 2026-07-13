@@ -20,6 +20,9 @@ _STAGE_SUBDIRS: dict[str, str] = {
 # Basename of the resolved NEOPAX config written under the Stage 5 output dir.
 RESOLVED_COMMON_CONFIG = "common_input_updated.toml"
 
+# Basename of the per-surface scan manifest each prepare checkpoint writes under its stage dir.
+MANIFEST_BASENAME = "manifest.json"
+
 
 def resolve_pipeline_paths(
     config: dict,
@@ -48,9 +51,11 @@ def resolve_pipeline_paths(
           (``s5_config`` is the shared ``common_input`` template);
         - output artifacts ``s1_output``..``s5_output``, ``s5_signal``;
         - per-stage output dirs ``stage1_dir``..``stage5_post_dir``;
-        - paths generated under ``outputs/``: ``s5_resolved_config`` (the
-          path-resolved NEOPAX copy NEOPAX actually runs) and ``s1_feedback``
-          (the evolved Stage 1 boundary the loop feeds to the next iteration).
+        - paths generated under ``outputs/``: ``stage3_manifest`` and
+          ``stage4_manifest`` (the per-surface scan manifests the prepare
+          checkpoints write), ``s5_resolved_config`` (the path-resolved NEOPAX
+          copy NEOPAX actually runs), and ``s1_feedback`` (the evolved Stage 1
+          boundary the loop feeds to the next iteration).
 
     Examples
     --------
@@ -113,6 +118,8 @@ def resolve_pipeline_paths(
         "stage5_dir": stage_dir("s5_output"),
         "stage5_post_dir": stage_dir("s5_signal"),
         # Generated under outputs/.
+        "stage3_manifest": f"{stage_dir('s3_output')}/{MANIFEST_BASENAME}",
+        "stage4_manifest": f"{stage_dir('s4_output')}/{MANIFEST_BASENAME}",
         "s5_resolved_config": f"{stage_dir('s5_output')}/{RESOLVED_COMMON_CONFIG}",
         "s1_feedback": f"{stage_dir('s5_signal')}/{fn('s1_input')}",
     }
