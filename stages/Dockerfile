@@ -13,8 +13,10 @@ COPY . .
 RUN pixi global install git
 # CONDA_OVERRIDE_CUDA can be set to a non-empty value with no problems for CPU
 # specific builds as the environment is already locked and this just installs it.
-RUN export CONDA_OVERRIDE_CUDA="$CUDA_VERSION" && \
-    pixi install --locked --environment $ENVIRONMENT
+# Keep it set while generating the shell hook so GPU rich-platform checks use
+# the same CUDA virtual package as the install step.
+ENV CONDA_OVERRIDE_CUDA=$CUDA_VERSION
+RUN pixi install --locked --environment $ENVIRONMENT
 # Activate ENVIRONMENT at container runtime by using the Pixi environment
 # activation script as the container ENTRYPOINT
 RUN echo "#!/usr/bin/env bash" > /app/entrypoint.sh && \

@@ -1,7 +1,13 @@
 [workspace]
 channels = ["conda-forge"]
 name = "driftless-star-stages"
-platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
+platforms = [
+    "linux-64",
+    "linux-aarch64",
+    "osx-arm64",
+    { name = "linux-64-cuda", platform = "linux-64", cuda = "12" },
+]
+requires-pixi = ">=0.71.0"
 version = "0.1.0"
 
 [feature.vmec-jax.dependencies]
@@ -77,25 +83,26 @@ neopax = { git = "https://github.com/uwplasma/NEOPAX.git", rev = "f9b3a91bcd1e44
 cwd = "../inputs/quick_run"
 cmd = "neopax common_input.toml"
 
+[feature.cpu]
+platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
+
 [feature.cuda]
-platforms = ["linux-64"]
-[feature.cuda.system-requirements]
-cuda = "12"
+platforms = ["linux-64-cuda"]
 
 [environments]
-stage-1-vmec = {features = ["vmec-jax"], no-default-feature = true }
+stage-1-vmec = {features = ["vmec-jax", "cpu"], no-default-feature = true }
 stage-1-vmec-gpu = {features = ["vmec-jax", "cuda"], no-default-feature = true }
-stage-1-desc = {features = ["desc"], no-default-feature = true }
+stage-1-desc = {features = ["desc", "cpu"], no-default-feature = true }
 stage-1-desc-gpu = {features = ["desc", "cuda"], no-default-feature = true }
-stage-2-booz = {features = ["booz-xform"], no-default-feature = true }
-stage-2-booz-jax = {features = ["booz-xform-jax"], no-default-feature = true }
+stage-2-booz = {features = ["booz-xform", "cpu"], no-default-feature = true }
+stage-2-booz-jax = {features = ["booz-xform-jax", "cpu"], no-default-feature = true }
 stage-2-booz-jax-gpu = {features = ["booz-xform-jax", "cuda"], no-default-feature = true }
-stage-3-sfincs-fortran = {features = ["sfincs"], no-default-feature = true}
-stage-3-sfincs = {features = ["sfincs-jax"], no-default-feature = true}
+stage-3-sfincs-fortran = {features = ["sfincs", "cpu"], no-default-feature = true}
+stage-3-sfincs = {features = ["sfincs-jax", "cpu"], no-default-feature = true}
 stage-3-sfincs-gpu = {features = ["sfincs-jax", "cuda"], no-default-feature = true }
-stage-3-neo-jax = {features = ["neo-jax"], no-default-feature = true}
+stage-3-neo-jax = {features = ["neo-jax", "cpu"], no-default-feature = true}
 stage-3-neo-jax-gpu = {features = ["neo-jax", "cuda"], no-default-feature = true }
-stage-4-spectrax = {features = ["spectrax-gk"], no-default-feature = true}
+stage-4-spectrax = {features = ["spectrax-gk", "cpu"], no-default-feature = true}
 stage-4-spectrax-gpu = {features = ["spectrax-gk", "cuda"], no-default-feature = true }
-stage-5-neopax = {features = ["neopax"], no-default-feature = true}
+stage-5-neopax = {features = ["neopax", "cpu"], no-default-feature = true}
 stage-5-neopax-gpu = {features = ["neopax", "cuda"], no-default-feature = true }
