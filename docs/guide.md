@@ -188,6 +188,11 @@ The Dockerfile uses a multi-stage build on a `ghcr.io/prefix-dev/pixi:noble` bas
 3. Commit both `stages/pixi.toml` and `stages/pixi.lock`
 4. CI rebuilds affected container images on merge
 
+The stages workspace requires Pixi 0.71 or newer. GPU environments resolve on
+the named `linux-64-cuda` platform, which declares CUDA 12 independently of the
+machine generating the lockfile; CPU environments continue to use the standard
+platform names.
+
 Updating the orchestration env follows the same pattern against the root `pixi.toml` / `pixi.lock`.
 
 ### Verify Container I/O
