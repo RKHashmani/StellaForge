@@ -1,0 +1,6 @@
+! Minimal VMEC INDATA namelist for exercising the pressure-fit rewrite.
+! Only the &INDATA delimiters and a rewritable AM line are required; the writer
+! reads no VMEC values, replaces AM, and inserts PMASS_TYPE and PRES_SCALE.
+&INDATA
+  AM = 0.0
+/

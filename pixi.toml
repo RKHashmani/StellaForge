@@ -8,12 +8,24 @@ version = "0.1.0"
 channels = ["conda-forge", "bioconda"]
 
 [feature.pipeline.dependencies]
-snakemake-minimal = ">=8,<10"
+# Floor 9.16: the DAG dry-run test passes --runtime-source-cache-path, added in snakemake 9.16.
+snakemake-minimal = ">=9.16,<10"
 graphviz = ">=9,<15"
 pytest = ">=8,<9"
 
 [feature.pipeline.tasks.ouroboros]
 cmd = "python -m src.ouroboros"
 
+[feature.test.dependencies]
+numpy = ">=2,<3"
+h5py = ">=3,<4"
+netcdf4 = ">=1.6,<2"
+scipy = ">=1.13,<2"
+pyyaml = ">=6,<7"
+
+[feature.test.tasks.test]
+cmd = "pytest -m 'not docker and not stage_env and not e2e' && pytest --doctest-modules src/utils/config_edit.py src/utils/paths.py src/io_contracts.py"
+
 [environments]
 pipeline = { features = ["pipeline"], no-default-feature = true }
+test = { features = ["pipeline", "test"], no-default-feature = true }
