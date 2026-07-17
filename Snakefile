@@ -1,5 +1,7 @@
 # driftless-star MVP Snakemake workflow
 
+from pathlib import Path
+
 from src import stage3_helper, stage4_helper, stage5_helper
 from src.utils import resolve_pipeline_paths, RESOLVED_COMMON_CONFIG
 
@@ -21,21 +23,63 @@ if DEVICE not in ("cpu", "gpu"):
         f"config['device'] must be 'cpu' or 'gpu', got {DEVICE!r}."
     )
 
-GPU_FLAG       = "--gpus all " if DEVICE == "gpu" else ""
+CONTAINER_RUNTIME = config.get("container_runtime", "docker")
+if CONTAINER_RUNTIME not in ("docker", "apptainer"):
+    raise ValueError(
+        "config['container_runtime'] must be 'docker' or 'apptainer', "
+        f"got {CONTAINER_RUNTIME!r}."
+    )
+
 STAGE1_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-1-vmec-{DEVICE}"
 STAGE2_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-2-booz-jax-{DEVICE}"
 STAGE3_JAX_IMG = f"ghcr.io/driftless-star/driftless-star:stage-3-sfincs-{DEVICE}"
 STAGE4_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-4-spectrax-{DEVICE}"
 STAGE5_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-5-neopax-{DEVICE}"
 
+def _apptainer_bind_flags(cfg: dict) -> str:
+    """Bind repo-relative workdir plus any absolute input/output roots."""
+    bind_specs = ['"$PWD:/work"']
+    for key in ("input_dir", "output_dir"):
+        path = cfg.get(key)
+        if not path:
+            continue
+        p = Path(path)
+        if p.is_absolute():
+            bind_specs.append(f'"{p}:{p}"')
+    return " ".join(f"--bind {spec}" for spec in dict.fromkeys(bind_specs))
+
+
+def _apptainer_image_ref(image: str) -> str:
+    """Map workflow image refs to native Apptainer image locations."""
+    if "://" in image or image.endswith(".sif"):
+        return image
+
+    repo, tag = image.rsplit(":", 1)
+    return f"oras://{repo}:apptainer-{tag}"
+
 # --user: make bind-mounted writes host-owned (Linux docker otherwise writes as root).
 # -e HOME=/tmp: pixi activation needs a writable HOME after dropping root.
-DOCKER_PREFIX = (
-    f'docker run --rm --pull=missing {GPU_FLAG}'
-    '--user "$(id -u):$(id -g)" '
-    '-e HOME=/tmp '
-    '-v "$PWD:/work" -w /work'
-)
+if CONTAINER_RUNTIME == "docker":
+    GPU_FLAG = "--gpus all " if DEVICE == "gpu" else ""
+    CONTAINER_PREFIX = (
+        f'docker run --rm --pull=missing {GPU_FLAG}'
+        '--user "$(id -u):$(id -g)" '
+        '-e HOME=/tmp '
+        '-v "$PWD:/work" -w /work '
+    )
+    def container_image_ref(image: str) -> str:
+        return f"{CONTAINER_PREFIX}{image}"
+else:
+    GPU_FLAG = "--nv " if DEVICE == "gpu" else ""
+    CONTAINER_PREFIX = (
+        # `--unsquash` avoids FUSE-based SIF mounts on execute nodes that do
+        # not expose /dev/fuse inside the parent HTCondor container.
+        f'apptainer run --unsquash {GPU_FLAG}'
+        f'{_apptainer_bind_flags(config)} '
+        '--pwd /work '
+    )
+    def container_image_ref(image: str) -> str:
+        return f"{CONTAINER_PREFIX}{_apptainer_image_ref(image)}"
 
 shell.executable("bash")
 # Propagate failures through `cmd | tee {log}` pipelines so a crashed stage
@@ -83,7 +127,7 @@ rule stage1_vmec:
     output: S1_OUTPUT
     log:    f"{P['stage1_dir']}/{RUN_NAME}.log"
     shell:
-        f"{DOCKER_PREFIX} {STAGE1_IMG} "
+        f"{container_image_ref(STAGE1_IMG)} "
         f"vmec_jax {{input}} --output {{output}}"
         " 2>&1 | tee {log}"
 
@@ -92,7 +136,7 @@ rule stage2_boozer:
     output: S2_OUTPUT
     log:    f"{P['stage2_dir']}/{RUN_NAME}.log"
     shell:
-        f"{DOCKER_PREFIX} {STAGE2_IMG} "
+        f"{container_image_ref(STAGE2_IMG)} "
         "python stages/stage2-boozer/run_boozer.py --wout {input} --output {output}"
         " 2>&1 | tee {log}"
 
@@ -107,8 +151,8 @@ rule stage3_sfincs:
         f"{P['stage3_dir']}/{RUN_NAME}.log"
     shell:
         stage3_helper.radial_scan_cmd(
-            docker_prefix=DOCKER_PREFIX,
-            image=STAGE3_JAX_IMG,
+            docker_prefix=CONTAINER_PREFIX,
+            image=_apptainer_image_ref(STAGE3_JAX_IMG) if CONTAINER_RUNTIME == "apptainer" else STAGE3_JAX_IMG,
             stage_cfg=STAGE3_CFG,
             output_dir=P["stage3_dir"],
             device=DEVICE,
@@ -126,8 +170,8 @@ rule stage4_spectrax:
         f"{P['stage4_dir']}/{RUN_NAME}.log"
     shell:
         stage4_helper.radial_scan_cmd(
-            docker_prefix=DOCKER_PREFIX,
-            image=STAGE4_IMG,
+            docker_prefix=CONTAINER_PREFIX,
+            image=_apptainer_image_ref(STAGE4_IMG) if CONTAINER_RUNTIME == "apptainer" else STAGE4_IMG,
             stage_cfg=STAGE4_CFG,
             output_dir=P["stage4_dir"],
             device=DEVICE,
@@ -145,7 +189,7 @@ rule stage5_neopax:
     log:
         f"{P['stage5_dir']}/{RUN_NAME}.log"
     shell:
-        f"{DOCKER_PREFIX} {STAGE5_IMG} "
+        f"{container_image_ref(STAGE5_IMG)} "
         f"sh -c \"cd {P['stage5_dir']} && neopax {RESOLVED_COMMON_CONFIG}\""
         " 2>&1 | tee {log}"
 
@@ -159,7 +203,7 @@ rule stage5_post_processing:
         feedback = S1_FEEDBACK,
     log:    f"{P['stage5_post_dir']}/{RUN_NAME}.log"
     shell:
-        f'{DOCKER_PREFIX} {STAGE5_IMG} sh -c "'
+        f'{container_image_ref(STAGE5_IMG)} sh -c "'
         'python stages/stage5-post-processing/fit_vmec_pressure_from_transport_h5.py '
         f'write-input {{input}} {S1_INPUT} --output-input {{output.feedback}} && '
         'python stages/stage5-post-processing/stage5_post_processing.py '

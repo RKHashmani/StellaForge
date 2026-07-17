@@ -1,0 +1,14 @@
+log = chtc_logs/apptainer-build.log
+output = chtc_logs/apptainer-build.out
+error = chtc_logs/apptainer-build.err
+
+# transfer_input_files = ../driftless-star
+transfer_input_files = Snakefile,src,stages,inputs,tests,pixi.lock,pixi.toml,chtc_submit
+
++IsBuildJob = True
+request_cpus = 8
+
+request_memory = 16GB
+request_disk = 150GB
+
+queue

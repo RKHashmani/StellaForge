@@ -1,0 +1,45 @@
+# Run Snakemake on the submit host:
+#
+#   pixi run -e pipeline snakemake \
+#     --profile profiles/htcondor-gpu \
+#     --configfile inputs/quick_run/config.yaml \
+#     --config device=gpu container_runtime=apptainer
+#
+# With staging inputs:
+#   pixi run -e pipeline snakemake \
+#     --profile profiles/htcondor-gpu \
+#     --configfile /staging/YOUR_STAGING_DIR/driftless-star/inputs/quick_run/config.yaml \
+#     --config \
+#       device=gpu container_runtime=apptainer \
+#       input_dir=/staging/YOUR_STAGING_DIR/driftless-star/inputs/quick_run \
+#       output_dir=/staging/YOUR_STAGING_DIR/driftless-star/outputs/quick_run
+#
+# Each remote rule job runs inside the parent Apptainer image below.
+# Disk, memory, and GPU resources are requested for each job, and can be adjusted for real-case runs.
+# Note: The apptainer sif file need to be in the root dir to run successfully.
+
+executor: htcondor
+jobs: 8
+shared-fs-usage: none
+htcondor-shared-fs-prefixes: "/staging,/shared"
+# latency-wait: 120
+max-status-checks-per-second: 2
+printshellcmds: true
+show-failed-logs: true
+restart-times: 0
+jobname: "{rule}-{jobid}"
+htcondor-jobdir: jobs
+
+default-resources:
+  universe: "container"
+  container_image: "chtc-runtime.sif"
+  job_wrapper: "profiles/htcondor/job_wrapper.sh"
+  htcondor_transfer_input_files: "Snakefile,src,stages,inputs,tests,pixi.lock,pixi.toml,profiles"
+  requirements: '(HasCHTCStaging==true)'
+  log: "chtc_logs/job_$(Cluster)_$(Process).log"
+  output: "chtc_logs/out_$(Cluster)_$(Process).out"
+  error: "chtc_logs/err_$(Cluster)_$(Process).err"
+  when_to_transfer_output: "ON_EXIT_OR_EVICT"
+  request_gpus: "1"
+  request_disk: "50GB"
+  request_memory: "50GB"
