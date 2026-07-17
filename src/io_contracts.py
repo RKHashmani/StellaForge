@@ -121,7 +121,12 @@ def _check_species_profile(arr: np.ndarray, name: str, n_rho: int | None, proble
 
 
 def _check_transport_solution(data: dict[str, np.ndarray | None]) -> list[str]:
-    """Check the union contract read by the Stage 3/4/5 transport-snapshot loaders.
+    """Check the fields read by the Stage 3/4/5 transport-snapshot loaders.
+
+    The Stage 3 loader accepts either ``temperature`` or ``pressure`` and derives the
+    missing one, but the Stage 4 loader hard-requires ``temperature`` with no pressure
+    fallback. The contract therefore requires ``temperature`` (the field that satisfies
+    both readers) and keeps ``pressure`` optional.
 
     Required: ``rho``, species-resolved ``density`` and ``temperature``, and ``Er`` with
     no species axis. Optional: ``pressure`` (same rank as density) and ``ts``.

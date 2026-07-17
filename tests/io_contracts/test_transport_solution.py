@@ -1,9 +1,12 @@
 """Tests for the ``transport_solution.h5`` contract in ``src/io_contracts.py``.
 
-The contract is the union of the Stage 3/4/5 transport-snapshot loaders: required
-``rho``/``density``/``temperature``/``Er`` (``Er`` with no species axis), optional
-``pressure``/``ts``. Malformed cases run on the inner checker; the valid and missing-Er
-files exercise the h5 read plus the raise.
+The contract covers the fields read by the Stage 3/4/5 transport-snapshot loaders:
+required ``rho``/``density``/``temperature``/``Er`` (``Er`` with no species axis),
+optional ``pressure``/``ts``. ``temperature`` is required and ``pressure`` optional
+because the Stage 3 loader accepts either and derives the missing one, while the
+Stage 4 loader hard-requires ``temperature`` with no pressure fallback. Malformed
+cases run on the inner checker; the valid and missing-Er files exercise the h5 read
+plus the raise.
 """
 
 from __future__ import annotations
