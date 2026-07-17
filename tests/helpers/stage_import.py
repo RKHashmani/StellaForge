@@ -30,8 +30,9 @@ def load_stage_module(relpath: str) -> ModuleType:
     Parameters
     ----------
     relpath : str
-        Script path relative to the repo root, e.g.
-        ``"stages/stage2-boozer/run_boozer.py"``.
+        Script path relative to the repo root, e.g. ``"stages/stage2-boozer/run_boozer.py"``. It is
+        joined onto the repo root and not constrained to stay under it. ``..`` segments resolve
+        normally, so throwaway scripts written to a temporary directory can be loaded as well.
 
     Returns
     -------
@@ -41,7 +42,7 @@ def load_stage_module(relpath: str) -> ModuleType:
     Raises
     ------
     FileNotFoundError
-        If ``relpath`` does not resolve to a file under the repo root.
+        If ``relpath`` does not resolve to an existing file.
     ImportError
         If the file stem is already registered from a different file, or if an
         import spec cannot be built for the file.
