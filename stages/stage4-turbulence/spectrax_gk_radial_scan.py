@@ -1814,6 +1814,12 @@ def cmd_all(args: argparse.Namespace) -> int:
         normalization_contract=args.normalization_contract,
         diagnostic_norm=args.diagnostic_norm,
         rho_star_physical=args.rho_star_physical,
+        response_mode=args.response_mode,
+        perturb_density_species=args.perturb_density_species,
+        perturb_temperature_species=args.perturb_temperature_species,
+        dkap_density=args.dkap_density,
+        dkap_temperature=args.dkap_temperature,
+        perturb_rel_step=args.perturb_rel_step,
     )
     rc = cmd_prepare(prepare_args)
     if rc != 0:
@@ -1935,6 +1941,40 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--normalization-contract", default=None)
     p.add_argument("--diagnostic-norm", default=None)
     p.add_argument("--rho-star-physical", type=float, default=None, help="Optional manual rho_star override; otherwise derive it per radius from VMEC geometry and the reference-ion profile")
+    p.add_argument(
+        "--response-mode",
+        choices=("none", "fd_gradients"),
+        default="none",
+        help="Optional turbulence-response mode. 'fd_gradients' reserves baseline plus perturbed gradient runs for a future finite-difference response path.",
+    )
+    p.add_argument(
+        "--perturb-density-species",
+        default=None,
+        help="Comma-separated species names to perturb through the density-gradient channel when response mode is enabled.",
+    )
+    p.add_argument(
+        "--perturb-temperature-species",
+        default=None,
+        help="Comma-separated species names to perturb through the temperature-gradient channel when response mode is enabled.",
+    )
+    p.add_argument(
+        "--dkap-density",
+        type=float,
+        default=None,
+        help="Optional absolute floor for density-gradient perturbations in fd_gradients mode.",
+    )
+    p.add_argument(
+        "--dkap-temperature",
+        type=float,
+        default=None,
+        help="Optional absolute floor for temperature-gradient perturbations in fd_gradients mode.",
+    )
+    p.add_argument(
+        "--perturb-rel-step",
+        type=float,
+        default=None,
+        help="Optional relative perturbation factor used later with fd_gradients mode.",
+    )
     p.add_argument("--average-window", type=float, default=1.0, help="Average turbulent fluxes over the final time window")
     p.add_argument("--plot", dest="plot", action="store_true", help="Write PNG plots of Gamma and Q versus rho.")
     p.add_argument("--no-plot", dest="plot", action="store_false", help="Skip PNG plots.")
