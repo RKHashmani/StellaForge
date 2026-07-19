@@ -1604,6 +1604,8 @@ def _expand_axis_zero_if_needed(
 def cmd_collect(args: argparse.Namespace) -> int:
     manifest = _load_manifest(Path(args.manifest).resolve())
     runs = manifest["runs"]
+    base_indices = [i for i, run in enumerate(runs) if str(run.get("response_role", "base")) == "base"] or list(range(len(runs)))
+    perturbed_indices = [i for i, run in enumerate(runs) if str(run.get("response_role", "")) == "perturbed"]
     species_meta = list(manifest.get("species_meta", []))
     species_names = [str(sp["name"]) for sp in species_meta] if species_meta else list(manifest["runtime_species_names"])
     runtime_species_names = list(manifest["runtime_species_names"])
@@ -1695,31 +1697,44 @@ def cmd_collect(args: argparse.Namespace) -> int:
         q_neopax[:, i] *= a_minor
         gamma_neopax[:, i] *= a_minor
 
+    base_idx = np.asarray(base_indices, dtype=int)
+    rho_base = rho[base_idx]
+    r_physical_base = r_physical[base_idx]
+    rho_index_base = rho_index[base_idx]
+    torflux_base = torflux[base_idx]
+    er_base = er[base_idx]
+    heat_flux_base = heat_flux[base_idx]
+    particle_flux_base = particle_flux[base_idx]
+    heat_flux_species_base = heat_flux_species[base_idx, :]
+    particle_flux_species_base = particle_flux_species[base_idx, :]
+    gamma_neopax_base = gamma_neopax[:, base_idx]
+    q_neopax_base = q_neopax[:, base_idx]
+
     (
-        rho,
-        r_physical,
-        rho_index,
-        torflux,
-        er,
-        heat_flux,
-        particle_flux,
-        heat_flux_species,
-        particle_flux_species,
-        gamma_neopax,
-        q_neopax,
+        rho_base,
+        r_physical_base,
+        rho_index_base,
+        torflux_base,
+        er_base,
+        heat_flux_base,
+        particle_flux_base,
+        heat_flux_species_base,
+        particle_flux_species_base,
+        gamma_neopax_base,
+        q_neopax_base,
     ) = _expand_axis_zero_if_needed(
         manifest,
-        rho,
-        r_physical,
-        rho_index,
-        torflux,
-        er,
-        heat_flux,
-        particle_flux,
-        heat_flux_species,
-        particle_flux_species,
-        gamma_neopax,
-        q_neopax,
+        rho_base,
+        r_physical_base,
+        rho_index_base,
+        torflux_base,
+        er_base,
+        heat_flux_base,
+        particle_flux_base,
+        heat_flux_species_base,
+        particle_flux_species_base,
+        gamma_neopax_base,
+        q_neopax_base,
     )
 
     with h5py.File(out_h5, "w") as f:
@@ -1751,11 +1766,11 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
     neopax_flux_out = Path(args.neopax_flux_out).resolve()
     neopax_flux_out.parent.mkdir(parents=True, exist_ok=True)
-    order = np.argsort(rho)
-    rho_sorted = rho[order]
-    r_sorted = r_physical[order]
-    gamma_sorted = gamma_neopax[:, order]
-    q_sorted = q_neopax[:, order]
+    order = np.argsort(rho_base)
+    rho_sorted = rho_base[order]
+    r_sorted = r_physical_base[order]
+    gamma_sorted = gamma_neopax_base[:, order]
+    q_sorted = q_neopax_base[:, order]
     with h5py.File(neopax_flux_out, "w") as f:
         f.create_dataset("rho", data=rho_sorted)
         f.create_dataset("r", data=r_sorted)
@@ -1775,6 +1790,27 @@ def cmd_collect(args: argparse.Namespace) -> int:
         meta.attrs["conversion"] = "Gamma_r = a * Gamma_rho = a * Gamma_gB * n_ref[m^-3] * vth_ref[m/s] * rho_star^2; Q_r = a * Q_rho = a * Q_gB * T_ref[eV] * n_ref[m^-3] * vth_ref[m/s] * rho_star^2"
         meta.attrs["reference_species_name"] = str(manifest.get("normalization", {}).get("reference_species_name", ""))
         meta.attrs["manifest"] = str(Path(args.manifest).resolve())
+        if perturbed_indices:
+            pert_idx = np.asarray(perturbed_indices, dtype=int)
+            response = f.create_group("response_fd")
+            dt = h5py.string_dtype(encoding="utf-8")
+            response.create_dataset("rho", data=rho[pert_idx])
+            response.create_dataset("r", data=r_physical[pert_idx])
+            response.create_dataset("rho_index", data=rho_index[pert_idx])
+            response.create_dataset("response_group", data=np.asarray([int(runs[i].get("response_group", -1)) for i in pert_idx], dtype=int))
+            response.create_dataset(
+                "perturb_kind",
+                data=np.asarray([str(runs[i].get("perturb_kind", "")) for i in pert_idx], dtype=object),
+                dtype=dt,
+            )
+            response.create_dataset(
+                "perturb_species",
+                data=np.asarray([str(runs[i].get("perturb_species", "")) for i in pert_idx], dtype=object),
+                dtype=dt,
+            )
+            response.create_dataset("perturb_delta", data=np.asarray([float(runs[i].get("perturb_delta", 0.0)) for i in pert_idx], dtype=float))
+            response.create_dataset("Gamma", data=gamma_neopax[:, pert_idx])
+            response.create_dataset("Q", data=q_neopax[:, pert_idx])
 
     if bool(args.plot):
         _write_summary_plots(
