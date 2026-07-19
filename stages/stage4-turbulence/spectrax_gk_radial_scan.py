@@ -1774,8 +1774,15 @@ def cmd_collect(args: argparse.Namespace) -> int:
     order = np.argsort(rho_base)
     rho_sorted = rho_base[order]
     r_sorted = r_physical_base[order]
+    rho_index_sorted = rho_index_base[order]
     gamma_sorted = gamma_neopax_base[:, order]
     q_sorted = q_neopax_base[:, order]
+    perturb_labels: list[tuple[str, str]] = []
+    if perturbed_indices:
+        for i in perturbed_indices:
+            label = (str(runs[i].get("perturb_kind", "")), str(runs[i].get("perturb_species", "")))
+            if label not in perturb_labels:
+                perturb_labels.append(label)
     with h5py.File(neopax_flux_out, "w") as f:
         f.create_dataset("rho", data=rho_sorted)
         f.create_dataset("r", data=r_sorted)
@@ -1795,27 +1802,37 @@ def cmd_collect(args: argparse.Namespace) -> int:
         meta.attrs["conversion"] = "Gamma_r = a * Gamma_rho = a * Gamma_gB * n_ref[m^-3] * vth_ref[m/s] * rho_star^2; Q_r = a * Q_rho = a * Q_gB * T_ref[eV] * n_ref[m^-3] * vth_ref[m/s] * rho_star^2"
         meta.attrs["reference_species_name"] = str(manifest.get("normalization", {}).get("reference_species_name", ""))
         meta.attrs["manifest"] = str(Path(args.manifest).resolve())
-        if perturbed_indices:
-            pert_idx = np.asarray(perturbed_indices, dtype=int)
-            response = f.create_group("response_fd")
-            dt = h5py.string_dtype(encoding="utf-8")
-            response.create_dataset("rho", data=rho[pert_idx])
-            response.create_dataset("r", data=r_physical[pert_idx])
-            response.create_dataset("rho_index", data=rho_index[pert_idx])
-            response.create_dataset("response_group", data=np.asarray([int(runs[i].get("response_group", -1)) for i in pert_idx], dtype=int))
-            response.create_dataset(
+        if perturb_labels:
+            label_to_index = {label: i for i, label in enumerate(perturb_labels)}
+            rho_index_to_axis = {int(rho_idx): axis for axis, rho_idx in enumerate(rho_index_sorted)}
+            gamma_perturb = np.zeros((len(perturb_labels), len(species_names), rho_sorted.size), dtype=float)
+            q_perturb = np.zeros((len(perturb_labels), len(species_names), rho_sorted.size), dtype=float)
+            perturb_delta = np.zeros((len(perturb_labels), rho_sorted.size), dtype=float)
+            perturb_present = np.zeros((len(perturb_labels), rho_sorted.size), dtype=bool)
+            for i in perturbed_indices:
+                label = (str(runs[i].get("perturb_kind", "")), str(runs[i].get("perturb_species", "")))
+                perturb_axis = label_to_index[label]
+                rho_axis = rho_index_to_axis.get(int(runs[i].get("rho_index", -1)))
+                if rho_axis is None:
+                    continue
+                gamma_perturb[perturb_axis, :, rho_axis] = gamma_neopax[:, i]
+                q_perturb[perturb_axis, :, rho_axis] = q_neopax[:, i]
+                perturb_delta[perturb_axis, rho_axis] = float(runs[i].get("perturb_delta", 0.0))
+                perturb_present[perturb_axis, rho_axis] = True
+            f.create_dataset("Gamma_perturb", data=gamma_perturb)
+            f.create_dataset("Q_perturb", data=q_perturb)
+            f.create_dataset("perturb_delta", data=perturb_delta)
+            f.create_dataset("perturb_present", data=perturb_present)
+            f.create_dataset(
                 "perturb_kind",
-                data=np.asarray([str(runs[i].get("perturb_kind", "")) for i in pert_idx], dtype=object),
+                data=np.asarray([label[0] for label in perturb_labels], dtype=object),
                 dtype=dt,
             )
-            response.create_dataset(
+            f.create_dataset(
                 "perturb_species",
-                data=np.asarray([str(runs[i].get("perturb_species", "")) for i in pert_idx], dtype=object),
+                data=np.asarray([label[1] for label in perturb_labels], dtype=object),
                 dtype=dt,
             )
-            response.create_dataset("perturb_delta", data=np.asarray([float(runs[i].get("perturb_delta", 0.0)) for i in pert_idx], dtype=float))
-            response.create_dataset("Gamma", data=gamma_neopax[:, pert_idx])
-            response.create_dataset("Q", data=q_neopax[:, pert_idx])
 
     if bool(args.plot):
         _write_summary_plots(
