@@ -576,6 +576,11 @@ def _build_manifest(
     template_norm = _template_section(template_cfg, "normalization")
     template_terms = _template_section(template_cfg, "terms")
     template_run = _template_section(template_cfg, "run")
+    parse_species_list = lambda raw: [part.strip() for part in str(raw or "").split(",") if part.strip()]
+    response_mode = str(getattr(args, "response_mode", "none")).strip().lower()
+    perturb_density_species = parse_species_list(getattr(args, "perturb_density_species", ""))
+    perturb_temperature_species = parse_species_list(getattr(args, "perturb_temperature_species", ""))
+    perturb_rel_step = getattr(args, "perturb_rel_step", None)
 
     gradient_coordinate = str(args.gradient_coordinate).strip().lower()
     gradient_scale = float(args.gradient_scale)
@@ -657,8 +662,46 @@ def _build_manifest(
     output_dir.mkdir(parents=True, exist_ok=True)
     runs_root = output_dir / "runs"
     runs_root.mkdir(parents=True, exist_ok=True)
+    run_index = 0
 
-    for ordinal, rho_idx in enumerate(rho_indices):
+    def _append_perturbed_run(
+        run_spec: dict[str, Any],
+        runtime_species: list[dict[str, Any]],
+        *,
+        suffix: str,
+        perturb_kind: str,
+        perturb_species: str,
+        perturb_delta: float,
+        local_geom_name: str,
+    ) -> None:
+        nonlocal run_index
+        pert_name = f"{base_name}_{suffix}_{perturb_species}".replace(".", "p")
+        pert_run_dir = (runs_root / pert_name).resolve()
+        pert_run_dir.mkdir(parents=True, exist_ok=True)
+        runs.append(
+            {
+                **run_spec,
+                "index": run_index,
+                "run_dir": str(pert_run_dir),
+                "config_path": str((pert_run_dir / "input.toml").resolve()),
+                "output_prefix": str((pert_run_dir / "run").resolve()),
+                "geometry_file": str((pert_run_dir / local_geom_name).resolve()),
+                "runtime_species": runtime_species,
+                "response_role": "perturbed",
+                "perturb_kind": perturb_kind,
+                "perturb_species": perturb_species,
+                "perturb_delta": float(perturb_delta),
+            }
+        )
+        run_index += 1
+
+    def _perturb_delta(base_grad: float, floor: float | None, *, signed: float) -> float:
+        return signed * max(
+            float(floor) if floor is not None else 0.0,
+            0.0 if perturb_rel_step is None else float(perturb_rel_step) * abs(base_grad),
+        )
+
+    for response_group, rho_idx in enumerate(rho_indices):
         rho_val = float(rho[rho_idx])
         torflux = float(rho_val ** 2)
         ref_n = float(ref_density[rho_idx])
@@ -718,7 +761,7 @@ def _build_manifest(
         geometry_file = str((run_dir / local_geom_name).resolve())
         config_path = str((run_dir / "input.toml").resolve())
         run_spec = {
-            "index": ordinal,
+            "index": run_index,
             "rho_index": int(rho_idx),
             "rho": rho_val,
             "r_physical": float(a_minor * rho_val),
@@ -733,8 +776,62 @@ def _build_manifest(
             "tau_e": tau_e,
             "rho_star_physical": rho_star_physical,
             "a_minor": float(a_minor),
+            "response_group": int(response_group),
+            "response_role": "base",
+            "perturb_kind": "",
+            "perturb_species": "",
+            "perturb_delta": 0.0,
         }
         runs.append(run_spec)
+        run_index += 1
+
+        if response_mode != "fd_gradients":
+            continue
+
+        runtime_species_map = {str(sp["name"]).strip().lower(): sp for sp in runtime_species}
+
+        for species_name in perturb_density_species:
+            species_key = species_name.strip().lower()
+            base_species = runtime_species_map.get(species_key)
+            if base_species is None:
+                continue
+            delta = _perturb_delta(float(base_species["fprim"]), args.dkap_density, signed=-1.0)
+            perturbed_species = [dict(sp) for sp in runtime_species]
+            for sp in perturbed_species:
+                if str(sp["name"]).strip().lower() == species_key:
+                    sp["fprim"] = float(sp["fprim"]) + delta
+                    sp["tprim"] = float(sp["tprim"]) - delta
+                    break
+            _append_perturbed_run(
+                run_spec,
+                perturbed_species,
+                suffix="fd_n",
+                perturb_kind="density_gradient",
+                perturb_species=species_name,
+                perturb_delta=delta,
+                local_geom_name=local_geom_name,
+            )
+
+        for species_name in perturb_temperature_species:
+            species_key = species_name.strip().lower()
+            base_species = runtime_species_map.get(species_key)
+            if base_species is None:
+                continue
+            delta = _perturb_delta(float(base_species["tprim"]), args.dkap_temperature, signed=1.0)
+            perturbed_species = [dict(sp) for sp in runtime_species]
+            for sp in perturbed_species:
+                if str(sp["name"]).strip().lower() == species_key:
+                    sp["tprim"] = float(sp["tprim"]) + delta
+                    break
+            _append_perturbed_run(
+                run_spec,
+                perturbed_species,
+                suffix="fd_t",
+                perturb_kind="temperature_gradient",
+                perturb_species=species_name,
+                perturb_delta=delta,
+                local_geom_name=local_geom_name,
+            )
 
     manifest = {
         "schema_version": 1,
@@ -746,6 +843,12 @@ def _build_manifest(
         "snapshot_time": snapshot.time_value,
         "electron_model": str(electron_model_value).lower(),
         "spectrax_template": None if template_path is None else str(template_path),
+        "response_mode": response_mode,
+        "perturb_density_species": perturb_density_species,
+        "perturb_temperature_species": perturb_temperature_species,
+        "dkap_density": None if args.dkap_density is None else float(args.dkap_density),
+        "dkap_temperature": None if args.dkap_temperature is None else float(args.dkap_temperature),
+        "perturb_rel_step": None if perturb_rel_step is None else float(perturb_rel_step),
         "source_rho": [float(v) for v in rho],
         "source_er": [float(v) for v in er],
         "runtime_species_names": runtime_species_names,
