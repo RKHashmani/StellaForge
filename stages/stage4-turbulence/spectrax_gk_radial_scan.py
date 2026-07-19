@@ -975,6 +975,11 @@ def _write_runs_csv(path: Path, manifest: dict[str, Any]) -> None:
             "config_path": run["config_path"],
             "output_prefix": run["output_prefix"],
             "geometry_file": run["geometry_file"],
+            "response_group": run.get("response_group", ""),
+            "response_role": run.get("response_role", ""),
+            "perturb_kind": run.get("perturb_kind", ""),
+            "perturb_species": run.get("perturb_species", ""),
+            "perturb_delta": run.get("perturb_delta", ""),
         }
         rows.append(row)
     path.parent.mkdir(parents=True, exist_ok=True)
