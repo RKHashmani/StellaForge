@@ -99,9 +99,9 @@ Containerize stages and write tests. Full checklist in the [Guide](docs/guide.md
   - [x] `SPECTRAX-GK`
   - [ ] `GX`
   - [ ] `GENE`
-- [ ] Stage 5 -- Transport
+- [x] Stage 5 -- Transport
   - [x] `NEOPAX`
-  - [ ] `Trinity3D`
+  - [x] `Trinity3D`
 
 ### Phase 3: Integrate
 
