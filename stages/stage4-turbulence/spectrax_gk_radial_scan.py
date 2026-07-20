@@ -338,14 +338,18 @@ def _build_standard_analytical_snapshot(
     n_radial: int,
 ) -> ProfileSnapshot:
     profile_cfg = cfg.get("profiles", {})
-    rho = np.linspace(0.0, 1.0, int(n_radial), dtype=np.float64)
+    rho_edge = float(cfg.get("geometry", {}).get("rho_edge", 1.0))
+    rho = np.linspace(0.0, rho_edge, int(n_radial), dtype=np.float64)
+    x = rho / max(float(rho[-1]) if rho.size else 1.0, 1.0e-30)
 
-    n0 = float(profile_cfg.get("n0", profile_cfg.get("ni0", profile_cfg.get("ne0", 4.21))))
-    n_edge = float(profile_cfg.get("n_edge", profile_cfg.get("nib", profile_cfg.get("neb", 0.6))))
-    t0 = float(profile_cfg.get("T0", profile_cfg.get("ti0", profile_cfg.get("te0", 17.8))))
-    t_edge = float(profile_cfg.get("T_edge", profile_cfg.get("tib", profile_cfg.get("teb", 0.7))))
-    density_shape_power = float(profile_cfg.get("density_shape_power", 2.0))
-    temperature_shape_power = float(profile_cfg.get("temperature_shape_power", 2.0))
+    n0 = _match_species_factors(profile_cfg.get("n0", profile_cfg.get("ni0", profile_cfg.get("ne0", 4.21))), n_species, default=4.21)
+    n_edge = _match_species_factors(profile_cfg.get("n_edge", profile_cfg.get("nib", profile_cfg.get("neb", 0.6))), n_species, default=0.6)
+    t0 = _match_species_factors(profile_cfg.get("T0", profile_cfg.get("ti0", profile_cfg.get("te0", 17.8))), n_species, default=17.8)
+    t_edge = _match_species_factors(profile_cfg.get("T_edge", profile_cfg.get("tib", profile_cfg.get("teb", 0.7))), n_species, default=0.7)
+    density_shape_power = _match_species_factors(profile_cfg.get("density_shape_power", 2.0), n_species, default=2.0)
+    density_shape_alpha = _match_species_factors(profile_cfg.get("density_shape_alpha", 1.0), n_species, default=1.0)
+    temperature_shape_power = _match_species_factors(profile_cfg.get("temperature_shape_power", 2.0), n_species, default=2.0)
+    temperature_shape_alpha = _match_species_factors(profile_cfg.get("temperature_shape_alpha", 1.0), n_species, default=1.0)
 
     c_density = profile_cfg.get("c_density")
     if c_density is None and n_species == 3:
@@ -358,15 +362,19 @@ def _build_standard_analytical_snapshot(
     density_global_scale = _match_species_factors(profile_cfg.get("n_scale", 1.0), n_species, default=1.0)
     temperature_global_scale = _match_species_factors(profile_cfg.get("T_scale", 1.0), n_species, default=1.0)
 
-    density_base = n_edge + (n0 - n_edge) * (1.0 - rho**density_shape_power)
-    temperature_base = t_edge + (t0 - t_edge) * (1.0 - rho**temperature_shape_power)
-    density = density_species_scale[:, None] * density_global_scale[:, None] * density_base[None, :]
-    temperature = temperature_species_scale[:, None] * temperature_global_scale[:, None] * temperature_base[None, :]
+    density = np.zeros((n_species, rho.size), dtype=np.float64)
+    temperature = np.zeros((n_species, rho.size), dtype=np.float64)
+    for i in range(n_species):
+        density_shape = (1.0 - x**density_shape_power[i]) ** density_shape_alpha[i]
+        temperature_shape = (1.0 - x**temperature_shape_power[i]) ** temperature_shape_alpha[i]
+        density_base = n_edge[i] + (n0[i] - n_edge[i]) * density_shape
+        temperature_base = t_edge[i] + (t0[i] - t_edge[i]) * temperature_shape
+        density[i, :] = density_species_scale[i] * density_global_scale[i] * density_base
+        temperature[i, :] = temperature_species_scale[i] * temperature_global_scale[i] * temperature_base
 
     er0_scale = float(profile_cfg.get("er0_scale", 100.0))
     er0_peak_rho = float(profile_cfg.get("er0_peak_rho", 0.8))
-    width = max(0.05, 0.35 * max(er0_peak_rho, 1.0 - er0_peak_rho, 0.15))
-    er = er0_scale * rho * np.exp(-0.5 * ((rho - er0_peak_rho) / width) ** 2)
+    er = er0_scale * x * (er0_peak_rho - x)
 
     return ProfileSnapshot(
         rho=np.asarray(rho, dtype=np.float64),
