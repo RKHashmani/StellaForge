@@ -1119,10 +1119,16 @@ def cmd_run_one(args: argparse.Namespace) -> int:
     )
     # When the parallel launcher starts this worker it exports the backend selectors into the
     # environment already, so --backend is omitted and the inherited variables are left untouched.
-    # A direct invocation with --backend configures those selectors here instead.
+    # A direct invocation with --backend configures those selectors here instead. --gpu-ids may
+    # carry a comma-separated list; a single surface consumes a single device, so only the first
+    # id is pinned and the rest are ignored.
     backend = getattr(args, "backend", None)
     if backend is not None:
-        _apply_backend_env(env, backend, getattr(args, "gpu_id", None), getattr(args, "threads_per_run", None))
+        gpu_id = None
+        if str(backend).lower() == "gpu":
+            gpu_tokens = [token.strip() for token in str(getattr(args, "gpu_ids", None) or "").split(",") if token.strip()]
+            gpu_id = gpu_tokens[0] if gpu_tokens else None
+        _apply_backend_env(env, backend, gpu_id, getattr(args, "threads_per_run", None))
     cmd = [
         sys.executable,
         "-m",
@@ -2069,7 +2075,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_one.add_argument("--run-name", default=None, help="Per-surface run_dir basename to execute instead of --index")
     run_one.add_argument("--verbose-worker", action="store_true")
     run_one.add_argument("--backend", choices=("cpu", "gpu"), default=None)
-    run_one.add_argument("--gpu-id", default=None)
+    run_one.add_argument("--gpu-ids", default=None, help="Comma-separated GPU ids; the worker pins the first one.")
     run_one.add_argument("--threads-per-run", type=int, default=None)
     run_one.set_defaults(func=cmd_run_one)
     return p

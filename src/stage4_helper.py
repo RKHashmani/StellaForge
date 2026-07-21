@@ -146,10 +146,10 @@ def run_one_cmd(
         "--run-name {wildcards.surf}",
         f"--backend {device}",
     ]
-    # The run-one worker pins a single device via --gpu-id. The raw config string is passed through
-    # unchanged; splitting a multi-GPU list round-robin across surfaces is a deferred follow-up.
+    # The raw comma-separated config value is passed through and the worker pins the first id,
+    # matching Stage 3; distributing a multi-GPU list across surfaces is a deferred follow-up.
     if device == "gpu" and stage_cfg.get("gpu_ids") is not None:
-        parts.append(f"--gpu-id {stage_cfg['gpu_ids']}")
+        parts.append(f"--gpu-ids {stage_cfg['gpu_ids']}")
     # --verbose-worker is a plain store_true with no negative form, so only an explicit config True
     # emits it; False and a missing key both leave the worker at its quiet default.
     if stage_cfg.get("verbose_workers") is True:

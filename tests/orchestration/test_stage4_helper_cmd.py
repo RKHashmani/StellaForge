@@ -7,7 +7,7 @@ the static base flags (the ``--vmec-file-override`` and ``--boozer-file-override
 geometry inputs plus the literal ``{input.*}`` and ``{wildcards.surf}`` placeholders
 Snakemake substitutes at run time), the not-None-only optional flags on ``prepare``
 (where ``t_max`` is emitted as ``--t-final``) and ``collect``, the tri-state and
-on-only booleans, the gpu-only singular ``--gpu-id`` flag on ``run-one``, and the
+on-only booleans, the gpu-only ``--gpu-ids`` flag on ``run-one``, and the
 absence of scan-level parallelism flags now that surface concurrency belongs to
 ``snakemake --cores``.
 """
@@ -175,15 +175,15 @@ def test_run_one_verbose_worker_on_only() -> None:
     assert "--no-verbose-worker" not in compose(run_one_cmd, stage_cfg={"verbose_workers": False})
 
 
-# GPU pinning applies only to the worker phase and uses the singular --gpu-id flag (the raw gpu_ids config string is
-# passed through; splitting a multi-GPU list across surfaces is deferred). It appears only when the device is gpu AND
-# the config sets gpu_ids: cpu suppresses it even when gpu_ids is configured, and gpu without gpu_ids emits nothing.
-# Token membership so --gpu-id is matched exactly.
-def test_run_one_gpu_id_only_on_gpu() -> None:
+# GPU pinning applies only to the worker phase: --gpu-ids passes the raw gpu_ids config string through and the worker
+# pins the first id (distributing a multi-GPU list across surfaces is deferred). It appears only when the device is
+# gpu AND the config sets gpu_ids: cpu suppresses it even when gpu_ids is configured, and gpu without gpu_ids emits
+# nothing. Token membership so --gpu-ids is matched exactly.
+def test_run_one_gpu_ids_only_on_gpu() -> None:
     cfg = {"gpu_ids": "0,1"}
-    assert "--gpu-id 0,1" in compose(run_one_cmd, stage_cfg=cfg, device="gpu")
-    assert "--gpu-id" not in compose(run_one_cmd, stage_cfg=cfg, device="cpu").split()
-    assert "--gpu-id" not in compose(run_one_cmd, stage_cfg={}, device="gpu").split()
+    assert "--gpu-ids 0,1" in compose(run_one_cmd, stage_cfg=cfg, device="gpu")
+    assert "--gpu-ids" not in compose(run_one_cmd, stage_cfg=cfg, device="cpu").split()
+    assert "--gpu-ids" not in compose(run_one_cmd, stage_cfg={}, device="gpu").split()
 
 
 # A drift guard. The exact-string tests only check the composer against itself; this checks it against the real stage
@@ -196,14 +196,14 @@ def test_prepare_flags_parse_and_dispatch_to_cmd_prepare() -> None:
     assert args.t_max == 10.0
 
 
-# A drift guard for the worker phase: the composed run-one command (gpu variant with verbose_workers on, so --gpu-id
+# A drift guard for the worker phase: the composed run-one command (gpu variant with verbose_workers on, so --gpu-ids
 # and --verbose-worker are included) must parse with the real stage script and dispatch to cmd_run_one, with the
 # substituted surface name landing on the run-one --run-name argument.
 def test_run_one_flags_parse_and_dispatch_to_cmd_run_one() -> None:
     args = parse_with_stage_script(compose(run_one_cmd, stage_cfg=_FULL_CFG, device="gpu"))
     assert args.func.__name__ == "cmd_run_one"
     assert args.run_name == "rho_001_r0p1000"
-    assert args.gpu_id == "0,1"
+    assert args.gpu_ids == "0,1"
 
 
 # A drift guard for the reduction phase: the composed collect command must parse with the real stage script, dispatch
