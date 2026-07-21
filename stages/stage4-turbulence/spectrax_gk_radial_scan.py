@@ -300,6 +300,33 @@ def _canonical_species_key(name: str) -> str:
     return str(name).strip().lower()
 
 
+def _warn_unmatched_perturb_species(
+    perturb_species: list[str], runtime_species_names: list[str], *, flag_label: str
+) -> None:
+    """Warn once per perturbation species name that matches no runtime species.
+
+    Parameters
+    ----------
+    perturb_species : list[str]
+        Names requested for a finite-difference gradient channel.
+    runtime_species_names : list[str]
+        Species that enter the runtime set for every flux surface.
+    flag_label : str
+        Channel identifier shown in the warning (e.g. ``perturb_density_species``).
+    """
+    available_keys = {_canonical_species_key(name) for name in runtime_species_names}
+    available_display = ", ".join(runtime_species_names)
+    for name in perturb_species:
+        if _canonical_species_key(name) in available_keys:
+            continue
+        print(
+            f"warning: {flag_label} '{name}' matches no runtime species "
+            f"(available: {available_display}); no perturbed runs generated for it, "
+            f"only unperturbed base runs will execute",
+            file=sys.stderr,
+        )
+
+
 def _infer_transport_snapshot(h5_path: Path, *, time_index: int) -> ProfileSnapshot:
     with h5py.File(h5_path, "r") as f:
         if {"rho", "density", "temperature", "Er"}.issubset(f.keys()):
@@ -678,6 +705,14 @@ def _build_manifest(
         runtime_species_names = [sp.name for sp in species]
     else:
         raise ValueError("electron_model must be either 'adiabatic' or 'kinetic'")
+
+    if response_mode == "fd_gradients":
+        _warn_unmatched_perturb_species(
+            perturb_density_species, runtime_species_names, flag_label="perturb_density_species"
+        )
+        _warn_unmatched_perturb_species(
+            perturb_temperature_species, runtime_species_names, flag_label="perturb_temperature_species"
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     runs_root = output_dir / "runs"
