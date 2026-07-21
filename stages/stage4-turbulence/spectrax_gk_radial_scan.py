@@ -52,6 +52,9 @@ DEFAULT_COMMON_CONFIG = STAGES_DIR.parent / "inputs" / "quick_run" / "common_inp
 DEFAULT_SPECTRAX_TEMPLATE = STAGES_DIR.parent / "inputs" / "quick_run" / "HSX_vacuum_ns201_quickrun.toml"
 DEFAULT_OUTPUT_DIR = STAGES_DIR.parent / "outputs" / "quick_run" / "stage4_turbulence"
 DEFAULT_SPECTRAX_ROOT = Path(__file__).resolve().parents[3] / "SPECTRAX-GK"
+DEFAULT_FD_PERTURB_REL_STEP = 0.5
+DEFAULT_FD_DKAP_DENSITY = 0.5
+DEFAULT_FD_DKAP_TEMPERATURE = 0.5
 
 NEOPAX_DENSITY_REFERENCE_M3 = 1.0e20
 NEOPAX_TEMPERATURE_REFERENCE_EV = 1.0e3
@@ -589,6 +592,15 @@ def _build_manifest(
     perturb_density_species = parse_species_list(getattr(args, "perturb_density_species", ""))
     perturb_temperature_species = parse_species_list(getattr(args, "perturb_temperature_species", ""))
     perturb_rel_step = getattr(args, "perturb_rel_step", None)
+    dkap_density = getattr(args, "dkap_density", None)
+    dkap_temperature = getattr(args, "dkap_temperature", None)
+    if response_mode == "fd_gradients":
+        if perturb_rel_step is None:
+            perturb_rel_step = DEFAULT_FD_PERTURB_REL_STEP
+        if dkap_density is None:
+            dkap_density = DEFAULT_FD_DKAP_DENSITY
+        if dkap_temperature is None:
+            dkap_temperature = DEFAULT_FD_DKAP_TEMPERATURE
 
     gradient_coordinate = str(args.gradient_coordinate).strip().lower()
     gradient_scale = float(args.gradient_scale)
@@ -803,7 +815,7 @@ def _build_manifest(
             base_species = runtime_species_map.get(species_key)
             if base_species is None:
                 continue
-            delta = _perturb_delta(float(base_species["fprim"]), args.dkap_density, signed=-1.0)
+            delta = _perturb_delta(float(base_species["fprim"]), dkap_density, signed=-1.0)
             perturbed_species = [dict(sp) for sp in runtime_species]
             for sp in perturbed_species:
                 if str(sp["name"]).strip().lower() == species_key:
@@ -825,7 +837,7 @@ def _build_manifest(
             base_species = runtime_species_map.get(species_key)
             if base_species is None:
                 continue
-            delta = _perturb_delta(float(base_species["tprim"]), args.dkap_temperature, signed=1.0)
+            delta = _perturb_delta(float(base_species["tprim"]), dkap_temperature, signed=1.0)
             perturbed_species = [dict(sp) for sp in runtime_species]
             for sp in perturbed_species:
                 if str(sp["name"]).strip().lower() == species_key:
@@ -854,8 +866,8 @@ def _build_manifest(
         "response_mode": response_mode,
         "perturb_density_species": perturb_density_species,
         "perturb_temperature_species": perturb_temperature_species,
-        "dkap_density": None if args.dkap_density is None else float(args.dkap_density),
-        "dkap_temperature": None if args.dkap_temperature is None else float(args.dkap_temperature),
+        "dkap_density": None if dkap_density is None else float(dkap_density),
+        "dkap_temperature": None if dkap_temperature is None else float(dkap_temperature),
         "perturb_rel_step": None if perturb_rel_step is None else float(perturb_rel_step),
         "source_rho": [float(v) for v in rho],
         "source_er": [float(v) for v in er],
