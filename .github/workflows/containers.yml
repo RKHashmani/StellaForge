@@ -63,7 +63,8 @@ jobs:
             {"environment": "stage-4-spectrax", "image-tag": "stage-4-spectrax-cpu", "platforms": "linux/amd64,linux/arm64"},
             {"environment": "stage-4-spectrax-gpu", "cuda-version": "12", "image-tag": "stage-4-spectrax-gpu", "platforms": "linux/amd64"},
             {"environment": "stage-5-neopax", "image-tag": "stage-5-neopax-cpu", "platforms": "linux/amd64,linux/arm64"},
-            {"environment": "stage-5-neopax-gpu", "cuda-version": "12", "image-tag": "stage-5-neopax-gpu", "platforms": "linux/amd64"}
+            {"environment": "stage-5-neopax-gpu", "cuda-version": "12", "image-tag": "stage-5-neopax-gpu", "platforms": "linux/amd64"},
+            {"environment": "stage-5-t3d", "image-tag": "stage-5-t3d-cpu", "platforms": "linux/amd64,linux/arm64"}
           ]
           EOF
           )

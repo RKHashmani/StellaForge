@@ -89,6 +89,9 @@ platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
 [feature.cuda]
 platforms = ["linux-64-cuda"]
 
+[feature.t3d.dependencies]
+t3d = ">=0.1.0,<0.2"
+
 [environments]
 stage-1-vmec = {features = ["vmec-jax", "cpu"], no-default-feature = true }
 stage-1-vmec-gpu = {features = ["vmec-jax", "cuda"], no-default-feature = true }
@@ -106,3 +109,4 @@ stage-4-spectrax = {features = ["spectrax-gk", "cpu"], no-default-feature = true
 stage-4-spectrax-gpu = {features = ["spectrax-gk", "cuda"], no-default-feature = true }
 stage-5-neopax = {features = ["neopax", "cpu"], no-default-feature = true}
 stage-5-neopax-gpu = {features = ["neopax", "cuda"], no-default-feature = true }
+stage-5-t3d = {features = ["t3d", "cpu"], no-default-feature = true}

@@ -57,6 +57,13 @@ Reference: `stellarator_workflow.tex`, Sections 4.8--4.9;
 pixi install --environment stage-5-neopax
 ```
 
+
+**Trinity3D:** Install via the Pixi environment. From the `stages/` directory:
+
+```
+pixi install --environment stage-5-t3d
+```
+
 See `docs/mvp-pipeline.md` for run commands and I/O details.
 
 > [!TODO]
