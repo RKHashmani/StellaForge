@@ -58,7 +58,7 @@ pixi install --environment stage-5-neopax
 ```
 
 
-**Trinity3D:** Install via the Pixi environment. From the `stages`/ directory:
+**Trinity3D:** Install via the Pixi environment. From the `stages/` directory:
 
 ```
 pixi install --environment stage-5-t3d
