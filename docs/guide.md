@@ -245,8 +245,9 @@ When a stage completes Phase 2 (containerized, tested, and producing valid outpu
 > Define the process for adding a stage to the Snakemake DAG.
 
 **Design points to keep in mind:**
-- Stages 3 and 4 run in parallel after Stage 2; Stage 3's `NEO_JAX` also runs in parallel with `sfincs_jax`
-- `NEO_JAX`'s epsilon_eff is a screening metric only -- it should not be wired as a dependency for Stage 5
+- The forward-pass Stage 3 (`sfincs_jax`) reads only the Stage 1 wout, so it runs in parallel with Stage 2; Stage 4 (`SPECTRAX-GK`) also needs the Stage 2 boozmn, so it follows Stage 2.
+- `NEO_JAX` reads the Stage 2 boozmn and runs alongside `sfincs_jax` as a screening diagnostic, but it has **no Snakemake rule** and is not part of the forward pass. Its epsilon_eff is a screening metric only. It should not be wired as a dependency for Stage 5.
+- Stages 3 and 4 each fan out one Snakemake job per flux surface via a three-rule `prepare` (checkpoint) / `run_one` / `collect` layout; see [Per-surface fan-out](mvp-pipeline.md#per-surface-fan-out-stages-3-and-4).
 
 ### Config-Driven Selection
 
