@@ -157,7 +157,7 @@ pixi run --manifest-path stages/pixi.toml stage-3-sfincs
 ```
 
 > [!NOTE]
-> The pixi `stage-3-sfincs` task and the Snakemake `stage3_sfincs` rule both pass the wout path to `sfincs_jax` via `--wout-path`, overriding the namelist `equilibriumFile` field. Populate `outputs/quick_run/stage1_equilibrium/` by running `pixi run --manifest-path stages/pixi.toml stage-1-vmec` first. The `sfincs_fortran` backend has no CLI override and still reads `equilibriumFile` from the namelist.
+> The pixi `stage-3-sfincs` task and the Snakemake `stage3_prepare` checkpoint both pass the wout path to `sfincs_jax` via `--wout-path`, overriding the namelist `equilibriumFile` field. Populate `outputs/quick_run/stage1_equilibrium/` by running `pixi run --manifest-path stages/pixi.toml stage-1-vmec` first. The `sfincs_fortran` backend has no CLI override and still reads `equilibriumFile` from the namelist.
 
 
 **Code:** SFINCS (Fortran)
@@ -218,8 +218,11 @@ pixi run --manifest-path stages/pixi.toml stage-4-spectrax
 which executes something morally equivalent to
 
 ```
-spectrax-gk run --config inputs/quick_run/HSX_vacuum_ns201_quickrun.toml --out outputs/quick_run/stage4_turbulence/hsx_run
+python -m spectraxgk.cli run --config inputs/quick_run/HSX_vacuum_ns201_quickrun.toml --out outputs/quick_run/stage4_turbulence/hsx_run
 ```
+
+> [!NOTE]
+> The pixi `stage-4-spectrax` task runs the all-in-one radial scan, which fans one `python -m spectraxgk.cli run` subprocess out per flux surface; the command above is the underlying per-surface invocation.
 
 ---
 
@@ -256,22 +259,58 @@ Stage 5 is orchestrated by Snakemake (`rule stage5_neopax`), which runs `neopax`
 
 Automates the MVP forward pass end-to-end: `Stage 1 -> {Stage 2, Stage 3, Stage 4} -> Stage 5`. Stages 2 and 3 fan out in parallel off the Stage 1 wout; Stage 4 also needs Stage 2's boozmn, so it follows Stage 2; and Stage 5 consumes all upstream outputs (wout, boozmn, neoclassical + turbulent fluxes). Each stage runs inside its pre-built GHCR container image (`ghcr.io/driftless-star/driftless-star:stage-N-<code>-{cpu,gpu}`) via `docker run`, so no local Pixi install is required beyond the `pipeline` env itself.
 
-| Direction | Format              | Location                                                                                            |
-| --------- | ------------------- | --------------------------------------------------------------------------------------------------- |
-| **In**    | YAML config         | `inputs/quick_run/config.yaml` (keys: `run_name`, `device`, `input_dir`, `output_dir`, `filenames`, `stage3`, `stage4`)                                   |
-| **In**    | Workflow definition | `Snakefile`                                                                                         |
-| **In**    | Per-stage inputs    | `inputs/quick_run/` (all stage inputs, flat)                                                          |
-| **Out**   | Stage 2 NetCDF      | `outputs/quick_run/stage2_boozer/boozmn_HSX_vacuum_ns201_quickrun.nc`                                           |
-| **Out**   | Stage 3 HDF5        | `outputs/quick_run/stage3_neoclassical/sfincs_jax_flux_profiles.h5`                                                    |
-| **Out**   | Stage 4 HDF5        | `outputs/quick_run/stage4_turbulence/neopax_fluxes.h5` (+ `flux_summary.h5`, `manifest.json`, `runs.csv`) |
-| **Out**   | Stage 4 cache       | `outputs/quick_run/stage4_turbulence/runs/rho_*/wout_HSX_vacuum_ns201_quickrun.eik.nc` (per-radius geometry, regenerated every rerun) |
-| **Out**   | Stage 5 HDF5        | `outputs/quick_run/stage5_transport/transport_solution.h5` (transport solution; default `rule all` target) |
+| Direction | Format              | Location                                                                                                                                                           |
+| --------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **In**    | YAML config         | `inputs/quick_run/config.yaml` (keys: `run_name`, `device`, `input_dir`, `output_dir`, `filenames`, `stage3`, `stage4`)                                            |
+| **In**    | Workflow definition | `Snakefile`                                                                                                                                                        |
+| **In**    | Per-stage inputs    | `inputs/quick_run/` (all stage inputs, flat)                                                                                                                       |
+| **Out**   | Stage 2 NetCDF      | `outputs/quick_run/stage2_boozer/boozmn_HSX_vacuum_ns201_quickrun.nc`                                                                                              |
+| **Out**   | Stage 3 HDF5        | `outputs/quick_run/stage3_neoclassical/sfincs_jax_flux_profiles.h5`                                                                                                |
+| **Out**   | Stage 3 cache       | `outputs/quick_run/stage3_neoclassical/manifest.json` + `runs/rho_*/{input.namelist, payload.json, sfincsOutput.h5, result.json}` (per-surface inputs and results) |
+| **Out**   | Stage 4 HDF5        | `outputs/quick_run/stage4_turbulence/neopax_fluxes.h5` (+ `flux_summary.h5`, `manifest.json`, `runs.csv`)                                                          |
+| **Out**   | Stage 4 cache       | `outputs/quick_run/stage4_turbulence/runs/rho_*/wout_HSX_vacuum_ns201_quickrun.eik.nc` (per-radius geometry, regenerated every rerun)                              |
+| **Out**   | Stage 5 HDF5        | `outputs/quick_run/stage5_transport/transport_solution.h5` (transport solution; default `rule all` target)                                                         |
 
 > [!NOTE]
 > `rule all` targets the Stage 5 transport solution (`transport_solution.h5`); all upstream artifacts (wout, boozmn, neoclassical + turbulent fluxes) are produced transitively because downstream rules declare them as `input:`. The loop-closing post-processing step is *not* part of `rule all` -- a plain `snakemake` stays a pure forward pass; see [Closing the Loop](#closing-the-loop).
 
 > [!NOTE]
 > Docker must be running on the host. On macOS / Windows that is Docker Desktop; on Linux, the docker engine or a rootless equivalent (podman aliased to `docker`). Windows users should invoke from WSL2 or Git Bash so bash expansions like `$PWD` resolve correctly inside the Snakefile's shell directives. HPC clusters that disallow Docker are a planned follow-up (Apptainer via `--sdm apptainer`).
+
+### Per-surface fan-out (Stages 3 and 4)
+
+Stages 3 and 4 do not run as single jobs. Each expands into three rules that fan one Snakemake job out per flux surface:
+
+1. **`checkpoint stageN_prepare`** -- reads the stage config plus its upstream geometry (Stage 3 takes the Stage 1 wout; Stage 4 takes the Stage 1 wout and the Stage 2 boozmn), then writes `manifest.json` at the stage directory enumerating the surfaces, plus each surface's inputs under `runs/<surf>/` (`input.namelist` + `payload.json` for Stage 3; the runtime `input.toml` + geometry `*.eik.nc` for Stage 4). Surface directory basenames look like `rho_012_r0p4898`.
+2. **`rule stageN_run_one`** -- one job and one container per surface. Stage 3 solves the surface and writes `runs/<surf>/result.json` (and `sfincsOutput.h5`); Stage 4 evolves it and writes `runs/<surf>/run.diagnostics.csv`.
+3. **`rule stageN_collect`** -- reduces every per-surface output into the stage's declared HDF5 (`sfincs_jax_flux_profiles.h5` / `neopax_fluxes.h5`).
+
+Which surfaces are scanned is driven by the `stage3.sfincs_jax` / `stage4.spectrax_gk` blocks in the run config (`analytical_n_radii` and the commented `num_radii` / `rho_min` / `rho_max` / `rho_indices` alternatives); see each stage's `spec.md`.
+
+> [!NOTE]
+> `prepare` is a Snakemake `checkpoint` because the surface count can be data-dependent: with `profiles_source: transport_h5` the rho grid is read from a `transport_solution.h5` at run time. A dry run (`snakemake -n`) therefore plans only up to the checkpoints plus the deferred `collect` jobs; the per-surface `run_one` layer materializes only after `prepare` actually runs. Surface-level concurrency is `snakemake --cores`, one job per surface.
+
+> [!NOTE]
+> `collect` is fail-fast: it requires every per-surface output, so one failed surface fails the stage. The zero-filling fallback survives only in each scan script's manual all-in-one CLI (running the script without a subcommand), which the Snakemake path does not use.
+
+### How the fan-out executes
+
+The Snakefile is Python, so defining a rule and executing its job happen at different times:
+
+1. **Parse time -- command strings only.** Each fan-out rule's `shell:` directive calls a per-phase composer in `src/stage3_helper.py` / `src/stage4_helper.py` (`prepare_cmd` / `run_one_cmd` / `collect_cmd`), which translates the run config's stage block into a one-line `docker run ...` command string. Nothing executes at this point, on any invocation (including dry runs); Snakemake placeholders (`{input.*}`, `{log}`, `{wildcards.surf}`) stay literal in the stored string.
+2. **Job execution.** When the scheduler selects a job (its inputs are built, its output is missing or stale, and a core is free), Snakemake substitutes the concrete paths into the stored string and runs it through bash under `set -o pipefail`, streaming container output to the rule's log via `tee` while the job runs. `snakemake -np` prints every fully substituted command without executing.
+3. **The checkpoint defers the per-surface layer.** `stageN_collect` declares its per-surface inputs as a gather function rather than a static list. That function calls `checkpoints.stageN_prepare.get()`, which fails softly until the checkpoint has run -- the reason dry runs plan only `prepare -> collect` (see the note above). Once `prepare` writes `manifest.json`, Snakemake re-evaluates the DAG and calls the gather function again: it now reads the manifest with stdlib `json` (the `pipeline` env has no numpy/h5py) and returns the per-surface output paths, built from each run directory's basename only -- the manifest's stored paths are container-absolute and never valid on the host.
+4. **Wildcard matching mints the jobs.** The gather function returns file paths, not jobs. Snakemake finds each path's producer by matching it against `stageN_run_one`'s `output:` template, where `{surf}` is a regex capture group constrained to `rho_\d+_r[0-9p]+`. Each demanded path solves to one `surf` value (e.g. `rho_012_r0p4898`), instantiating one job, and that value threads into every `{surf}` / `{wildcards.surf}` in the rule (the log path; `--payload` / `--run-name` in the composed command), so each job addresses exactly its own surface. quick_run's 50 demanded Stage 3 paths yield 50 jobs from one template rule, with no explicit loop anywhere.
+
+End to end for Stage 3 (Stage 4 has the same shape, with the Stage 2 boozmn as an extra `prepare` input), Snakemake plans demand-first and then executes dependency-first:
+
+1. `rule all` needs the Stage 5 output, whose rule inputs the Stage 3 HDF5; the producer of that file is `stage3_collect`.
+2. `stage3_collect` declares two inputs: the manifest file and the gather function. Evaluating the function calls `checkpoints.stage3_prepare.get()`, which signals "checkpoint not run yet", so the per-surface input list is deferred.
+3. The manifest demand schedules `checkpoint stage3_prepare`, whose own inputs pull in `stage1_vmec` (the wout) upstream.
+4. Execution starts: `stage1_vmec` runs, then `stage3_prepare` runs and writes `manifest.json` plus each surface's inputs under `runs/<surf>/`.
+5. Checkpoint completion triggers the DAG re-evaluation: the gather function runs again, now reads the manifest, and returns the per-surface `runs/<surf>/result.json` paths (50 for quick_run).
+6. Each returned path is wildcard-matched to `stage3_run_one`'s output pattern, minting one job per surface; they execute up to `--cores` at a time.
+7. Once every `result.json` exists, `stage3_collect` finally has a complete input set, runs, and reduces them into the stage HDF5, unblocking Stage 5.
 
 ### How to Install
 
@@ -342,7 +381,23 @@ pixi run -e pipeline bash -c 'snakemake --filegraph --configfile inputs/quick_ru
 
 
 > [!NOTE]
-> For the inverse view (*rules* as nodes, showing how they depend on each other irrespective of which files they share), swap `--filegraph` for `--rulegraph`. For the per-job DAG (every rule instance, one node each, most useful when wildcards produce many parallel jobs), swap for `--dag`.
+> For the inverse view (*rules* as nodes, showing how they depend on each other irrespective of which files they share), swap `--filegraph` for `--rulegraph`. For the per-job DAG (every rule instance, one node each, most useful when wildcards produce many parallel jobs), swap for `--dag` -- but see [Drawing the complete per-surface job DAG](#drawing-the-complete-per-surface-job-dag) for how the Stage 3/4 checkpoints affect it.
+
+### Drawing the complete per-surface job DAG
+
+Because the [per-surface fan-out](#per-surface-fan-out-stages-3-and-4) is checkpoint-driven, `--dag` can only place the per-surface `run_one` layer in the graph once each stage's `manifest.json` exists and is up to date; until then the graph collapses to `prepare -> collect`, for the same reason a dry run plans only up to the checkpoints. To materialize both manifests without a full pipeline run, target them directly (only Stage 1, Stage 2, and the two `prepare` jobs execute), then render:
+
+```
+pixi run -e pipeline snakemake --configfile inputs/quick_run/config.yaml --cores 4 \
+  outputs/quick_run/stage3_neoclassical/manifest.json \
+  outputs/quick_run/stage4_turbulence/manifest.json
+pixi run -e pipeline bash -c 'snakemake --dag --configfile inputs/quick_run/config.yaml | dot -Tsvg > ./driftless-star_dag.svg'
+```
+
+Jobs that are already up to date are drawn with dashed borders. Prefer SVG: with `inputs/quick_run/`'s 50 Stage 3 surfaces the fanned-out graph is very wide (for PNG, reuse the `-Tpng -Gdpi=150` form above).
+
+> [!NOTE]
+> Do not combine `--dag` with `--forceall`/`-F`: forcing the checkpoints to rerun makes their manifests count as not-yet-available while the DAG is built, so the per-surface layer is deferred and the graph collapses back to `prepare -> collect`. The same collapse happens whenever Snakemake decides a `prepare` must rerun for any other reason (e.g. edited configs or code-change rerun triggers); appending `--rerun-triggers mtime` restores the fan-out as long as the manifests are newer than their inputs.
 
 ---
 

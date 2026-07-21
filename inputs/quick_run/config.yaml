@@ -32,11 +32,21 @@ convergence:
   pressure_rel_tol: 1.0e-2
 
 # Stage 3 SFINCS (sfincs_jax) radial scan.
+# Surface-level concurrency is controlled by `snakemake --cores`.
 stage3:
   sfincs_jax:
     # --- Profile source ---
     profiles_source: analytical
     neopax_result: null
+
+    # --- Surface selection ---
+    # Number of rho grid points for profiles_source: analytical (the axis point is
+    # dropped, so for e.g. 51 points scan 50 surfaces).
+    analytical_n_radii: 51
+    # num_radii: 4            # subsample this many radii inside the rho window
+    # rho_min: 0.1            # lower edge of the rho window
+    # rho_max: 0.9            # upper edge of the rho window
+    # rho_indices: "1,5,10"   # comma-separated explicit indices instead of the full grid
 
     # --- Resolution ---
     ntheta: 5
@@ -45,8 +55,6 @@ stage3:
     nx: 4
     solver_tolerance: 1.0e-6
 
-    # --- Parallelism ---
-    max_parallel: 1
     # Used only when `device: gpu`.
     gpu_ids: "0"
 
@@ -55,11 +63,21 @@ stage3:
     verbose_workers: true
 
 # Stage 4 SPECTRAX-GK radial scan.
+# Surface-level concurrency is controlled by `snakemake --cores`.
 stage4:
   spectrax_gk:
     # --- Profile source ---
     profiles_source: analytical
     neopax_result: null
+
+    # --- Surface selection ---
+    # Number of rho grid points for profiles_source: analytical; null falls back to
+    # [geometry].n_radial in common_input.toml (5 points, scanning 4 nonzero surfaces).
+    analytical_n_radii: null
+    # num_radii: 4            # subsample this many radii inside the rho window
+    # rho_min: 0.0            # lower edge of the rho window
+    # rho_max: 1.0            # upper edge of the rho window
+    # rho_indices: "1,2,3"    # comma-separated explicit indices instead of the window
 
     # --- Resolution / time window ---
     nx: 12
@@ -70,8 +88,6 @@ stage4:
     sample_stride: 50
     diagnostics_stride: 1
 
-    # --- Parallelism ---
-    max_parallel: 1
     # Used only when `device: gpu`.
     gpu_ids: "0"
 
@@ -79,4 +95,3 @@ stage4:
     plot: true
     plot_run_heat_traces: true
     verbose_workers: true
-    collect_even_if_failures: true

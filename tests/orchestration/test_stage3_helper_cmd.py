@@ -1,20 +1,24 @@
-"""Tests for ``src.stage3_helper.radial_scan_cmd``.
+"""Tests for the ``src.stage3_helper`` per-phase command composers.
 
-``radial_scan_cmd`` turns the ``stage3.sfincs_jax`` config block into the single
-shell command that the Snakefile's ``rule stage3_sfincs`` runs. The exact string
-it builds is the contract with that rule, so this pins it: the static base flags
-(including the literal ``{input.*}`` placeholders Snakemake substitutes at run
-time), the not-None-only optional flags, the tri-state booleans, and the
-gpu-only ``--gpu-ids`` flag.
+``prepare_cmd``, ``run_one_cmd``, and ``collect_cmd`` turn the ``stage3.sfincs_jax``
+config block into the three shell commands that the Snakefile's per-phase Stage 3
+rules run. The exact strings are the contract with those rules, so this pins them:
+the static base flags (including the literal ``{input.*}`` and ``{wildcards.surf}``
+placeholders Snakemake substitutes at run time), the not-None-only optional flags
+on ``prepare``, the tri-state booleans, the gpu-only ``--gpu-ids`` flag on
+``run-one``, and the absence of scan-level parallelism flags now that surface
+concurrency belongs to ``snakemake --cores``.
 """
 
 from __future__ import annotations
 
+import argparse
 import re
+from collections.abc import Callable
 
 import pytest
 
-from src.stage3_helper import radial_scan_cmd
+from src.stage3_helper import collect_cmd, prepare_cmd, run_one_cmd
 from tests.helpers.stage_import import load_stage_module
 
 _STAGE3_SCRIPT = "stages/stage3-neoclassical/sfincs_jax_radial_scan.py"
@@ -23,8 +27,34 @@ _STAGE3_SCRIPT = "stages/stage3-neoclassical/sfincs_jax_radial_scan.py"
 _PLACEHOLDER = re.compile(r"\{(?:input|output)\.[A-Za-z0-9_]+\}")
 _scan = load_stage_module(_STAGE3_SCRIPT)
 
+# Every prepare-phase optional key with a quick-run-like value, used both to exercise
+# each flag individually and to prove that a fully-populated config never leaks
+# scan-level parallelism flags. max_parallel is a retired key that older configs may
+# still carry; it must be ignored by every composer.
+_PREPARE_OPTIONALS: list[tuple[str, str, object]] = [
+    ("profiles_source",    "--profiles-source",    "analytical"),
+    ("neopax_result",      "--neopax-result",      "outputs/quick_run/stage5_transport/transport_solution.h5"),
+    ("ntheta",             "--ntheta",             5),
+    ("nzeta",              "--nzeta",              11),
+    ("nxi",                "--nxi",                12),
+    ("nx",                 "--nx",                 4),
+    ("solver_tolerance",   "--solver-tolerance",   1e-06),
+    ("analytical_n_radii", "--analytical-n-radii", 51),
+    ("rho_indices",        "--rho-indices",        "1,5,10"),
+    ("rho_min",            "--rho-min",            0.1),
+    ("rho_max",            "--rho-max",            0.9),
+    ("num_radii",          "--num-radii",          4),
+]
 
-def cmd(**overrides) -> str:
+_FULL_CFG: dict = {key: value for key, _, value in _PREPARE_OPTIONALS} | {
+    "gpu_ids": "0,1",
+    "plot": False,
+    "verbose_workers": True,
+    "max_parallel": 8,
+}
+
+
+def compose(composer: Callable[..., str], **overrides) -> str:
     """Build a command with quick-run-like defaults, overriding only what a test varies."""
     base = dict(
         docker_prefix="docker run --rm",
@@ -34,19 +64,30 @@ def cmd(**overrides) -> str:
         device="cpu",
     )
     base.update(overrides)
-    return radial_scan_cmd(**base)
+    return composer(**base)
 
 
-# `radial_scan_cmd` builds the shell command the Snakefile runs for Stage 3. With an empty config and cpu device, it
-# should emit just the fixed base command. This pins that exact string, including the literal `{input.*}` placeholders
-# that Snakemake fills in with real file paths at run time.
-def test_base_command_with_empty_config() -> None:
-    # Empty config + cpu emits exactly the static base parts; this equality also
-    # pins the literal {input.*} placeholders, which must survive verbatim so
-    # Snakemake can substitute them at rule-execution time.
-    assert cmd() == (
+def parse_with_stage_script(command: str) -> argparse.Namespace:
+    """Feed a composed command's argv into the real stage script parser and return the namespace.
+
+    Fails the test if argparse rejects any flag (argparse exits via ``sys.exit(2)``).
+    """
+    concrete = _PLACEHOLDER.sub("placeholder_path", command).replace("{wildcards.surf}", "rho_001_r0p1000")
+    tokens = concrete.split()
+    argv = tokens[tokens.index(_STAGE3_SCRIPT) + 1:]
+    try:
+        return _scan.build_parser().parse_args(argv)
+    except SystemExit as exc:
+        pytest.fail(f"stage script parser rejected a composer-emitted flag: argv={argv} (exit {exc.code})")
+
+
+# `prepare_cmd` builds the shell command that writes per-surface payloads and the scan manifest. With an empty config
+# and cpu device it should emit just the fixed base command. This pins that exact string, including the `prepare`
+# subcommand token and the literal `{input.*}` placeholders that Snakemake fills in with real file paths at run time.
+def test_prepare_base_command_with_empty_config() -> None:
+    assert compose(prepare_cmd) == (
         "docker run --rm ghcr.io/driftless-star/driftless-star:stage-3-sfincs-cpu "
-        "python stages/stage3-neoclassical/sfincs_jax_radial_scan.py "
+        "python stages/stage3-neoclassical/sfincs_jax_radial_scan.py prepare "
         "--common-config {input.common_config} "
         "--sfincs-template {input.config_file} "
         "--wout-path {input.wout} "
@@ -55,62 +96,101 @@ def test_base_command_with_empty_config() -> None:
     )
 
 
-def test_only_non_none_optionals_appear() -> None:
-    out = cmd(stage_cfg={"ntheta": 31, "nx": 64, "nzeta": None})
-    assert "--ntheta 31" in out
-    assert "--nx 64" in out
-    assert "--nzeta" not in out             # explicit None -> omitted
-    assert "--profiles-source" not in out   # absent key -> omitted
+# `run_one_cmd` builds the per-surface worker command. This pins the exact string: the payload path is derived from the
+# output dir plus the literal `{wildcards.surf}` placeholder (Snakemake substitutes the surface's run-directory name at
+# rule-execution time), and nothing beyond the payload and backend is emitted with an empty config.
+def test_run_one_base_command_with_empty_config() -> None:
+    assert compose(run_one_cmd) == (
+        "docker run --rm ghcr.io/driftless-star/driftless-star:stage-3-sfincs-cpu "
+        "python stages/stage3-neoclassical/sfincs_jax_radial_scan.py run-one "
+        "--payload outputs/quick_run/stage3_neoclassical/runs/{wildcards.surf}/payload.json "
+        "--backend cpu"
+    )
 
 
-# Boolean toggles are tri-state: True emits `--flag`, False emits `--no-flag`, and an absent key emits neither.
-# Parametrized over two such toggles, this checks all three cases. It splits the command into tokens and checks
-# membership so, e.g., `--plot` isn't falsely "found" inside `--no-plot`.
-@pytest.mark.parametrize(
-    "key, on, off",
-    [
-        ("plot", "--plot", "--no-plot"),
-        ("verbose_workers", "--verbose-workers", "--no-verbose-workers"),
-    ],
-)
-def test_tristate_bools(key: str, on: str, off: str) -> None:
-    # Token membership (not substring) so --plot does not match inside --no-plot.
-    assert on in cmd(stage_cfg={key: True}).split()
-    assert off in cmd(stage_cfg={key: False}).split()
-    absent = cmd(stage_cfg={}).split()
-    assert on not in absent and off not in absent
+# `collect_cmd` builds the reduction command that folds per-surface results into the flux-profile HDF5. With an empty
+# config it should emit only the `collect` subcommand and the output dir; no backend flag exists on the reduction step.
+def test_collect_base_command_with_empty_config() -> None:
+    assert compose(collect_cmd) == (
+        "docker run --rm ghcr.io/driftless-star/driftless-star:stage-3-sfincs-cpu "
+        "python stages/stage3-neoclassical/sfincs_jax_radial_scan.py collect "
+        "--output-dir outputs/quick_run/stage3_neoclassical"
+    )
 
 
-def test_gpu_ids_only_on_gpu() -> None:
+# Each prepare-phase optional key set on its own must emit its flag-value pair exactly once; an absent key must emit
+# nothing. Parametrizing over the full optional table also locks the config-key to CLI-flag spelling (for example
+# analytical_n_radii becomes --analytical-n-radii).
+@pytest.mark.parametrize("key, flag, value", _PREPARE_OPTIONALS)
+def test_prepare_optional_flag_emitted_exactly_once(key: str, flag: str, value: object) -> None:
+    out = compose(prepare_cmd, stage_cfg={key: value})
+    assert f"{flag} {value}" in out
+    assert out.split().count(flag) == 1
+    assert flag not in compose(prepare_cmd, stage_cfg={})
+
+
+# verbose_workers is consumed at prepare time (baked into each payload.json), so its toggle lives on `prepare` and is
+# tri-state: True emits the on-flag, False the off-flag, and an absent key emits neither so the script default applies.
+# Token membership is used so --verbose-workers is not falsely found inside --no-verbose-workers.
+def test_prepare_verbose_workers_tristate() -> None:
+    assert "--verbose-workers" in compose(prepare_cmd, stage_cfg={"verbose_workers": True}).split()
+    assert "--no-verbose-workers" in compose(prepare_cmd, stage_cfg={"verbose_workers": False}).split()
+    absent = compose(prepare_cmd, stage_cfg={}).split()
+    assert "--verbose-workers" not in absent and "--no-verbose-workers" not in absent
+
+
+# Plotting happens in the reduction step, so the plot toggle lives on `collect` and is tri-state: True emits --plot,
+# False emits --no-plot, absent emits neither. Token membership so --plot is not falsely found inside --no-plot.
+def test_collect_plot_tristate() -> None:
+    assert "--plot" in compose(collect_cmd, stage_cfg={"plot": True}).split()
+    assert "--no-plot" in compose(collect_cmd, stage_cfg={"plot": False}).split()
+    absent = compose(collect_cmd, stage_cfg={}).split()
+    assert "--plot" not in absent and "--no-plot" not in absent
+
+
+# GPU pinning applies only to the worker phase: --gpu-ids appears only when the device is gpu AND the config sets
+# gpu_ids. A cpu device suppresses it even when gpu_ids is configured, and a gpu device without gpu_ids emits nothing.
+def test_run_one_gpu_ids_only_on_gpu() -> None:
     cfg = {"gpu_ids": "0,1"}
-    on_gpu = cmd(stage_cfg=cfg, device="gpu")
-    assert "--gpu-ids 0,1" in on_gpu
-    assert "--gpu-ids" not in cmd(stage_cfg=cfg, device="cpu")  # cpu suppresses it
-    assert "--gpu-ids" not in cmd(stage_cfg={}, device="gpu")   # gpu but no ids
+    assert "--gpu-ids 0,1" in compose(run_one_cmd, stage_cfg=cfg, device="gpu")
+    assert "--gpu-ids" not in compose(run_one_cmd, stage_cfg=cfg, device="cpu")
+    assert "--gpu-ids" not in compose(run_one_cmd, stage_cfg={}, device="gpu")
 
 
-# A drift guard. The exact-string tests only check the helper against itself; this checks it against the real stage
-# script. It configures every optional and toggle, strips out the Snakemake placeholders, and feeds the resulting flags
-# into the stage script's own argparse parser (`build_parser`). If the script ever renames or drops a flag, argparse
-# exits (`sys.exit(2)`) and this test fails, catching the mismatch.
-def test_emitted_flags_parse_with_stage_script() -> None:
-    stage_cfg = {
-        "profiles_source": "analytical",
-        "neopax_result": "outputs/quick_run/stage5_transport/transport_solution.h5",
-        "ntheta": 31,
-        "nzeta": 15,
-        "nxi": 12,
-        "nx": 64,
-        "solver_tolerance": 1.0e-6,
-        "max_parallel": 8,
-        "gpu_ids": "0,1",
-        "plot": False,            # emits --no-plot
-        "verbose_workers": True,  # emits --verbose-workers
-    }
-    concrete = _PLACEHOLDER.sub("placeholder_path", cmd(stage_cfg=stage_cfg, device="gpu"))
-    tokens = concrete.split()
-    argv = tokens[tokens.index(_STAGE3_SCRIPT) + 1:]
-    try:
-        _scan.build_parser().parse_args(argv)
-    except SystemExit as exc:
-        pytest.fail(f"stage script parser rejected a helper-emitted flag: argv={argv} (exit {exc.code})")
+# A drift guard. The exact-string tests only check the composer against itself; this checks it against the real stage
+# script. It configures every optional and toggle, substitutes the Snakemake placeholders, and feeds the argv into the
+# stage script's own `build_parser`. Parsing must succeed and dispatch to cmd_prepare, so a renamed or dropped flag on
+# the prepare subparser fails here.
+def test_prepare_flags_parse_and_dispatch_to_cmd_prepare() -> None:
+    args = parse_with_stage_script(compose(prepare_cmd, stage_cfg=_FULL_CFG))
+    assert args.func.__name__ == "cmd_prepare"
+
+
+# A drift guard for the worker phase: the composed run-one command (gpu variant, so --gpu-ids is included) must parse
+# with the real stage script and dispatch to cmd_run_one, and the payload path must land on the run-one --payload
+# argument rather than on any flat-parser attribute.
+def test_run_one_flags_parse_and_dispatch_to_cmd_run_one() -> None:
+    args = parse_with_stage_script(compose(run_one_cmd, stage_cfg=_FULL_CFG, device="gpu"))
+    assert args.func.__name__ == "cmd_run_one"
+    assert args.payload == "outputs/quick_run/stage3_neoclassical/runs/rho_001_r0p1000/payload.json"
+
+
+# A drift guard for the reduction phase. The flat (no-subcommand) parser defines its own --output-dir and --plot
+# defaults; this asserts the collect subparser's parsed values win, so the composed --output-dir and --no-plot reach
+# cmd_collect instead of being shadowed by flat-parser defaults.
+def test_collect_flags_parse_and_dispatch_to_cmd_collect() -> None:
+    args = parse_with_stage_script(compose(collect_cmd, stage_cfg=_FULL_CFG))
+    assert args.func.__name__ == "cmd_collect"
+    assert args.output_dir == "outputs/quick_run/stage3_neoclassical"
+    assert args.plot is False
+    assert args.command == "collect"
+
+
+# Surface-level concurrency now belongs to `snakemake --cores`, so even a fully-populated config (including the retired
+# max_parallel key) must never make any composer emit a scan-level parallelism flag.
+def test_no_composer_emits_scan_level_parallelism_flags() -> None:
+    for composer in (prepare_cmd, run_one_cmd, collect_cmd):
+        for device in ("cpu", "gpu"):
+            out = compose(composer, stage_cfg=_FULL_CFG, device=device)
+            assert "--max-parallel" not in out
+            assert "--collect-even-if-failures" not in out
