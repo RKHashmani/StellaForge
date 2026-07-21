@@ -88,6 +88,23 @@ stage4:
     sample_stride: 50
     diagnostics_stride: 1
 
+    # --- Turbulence response (perturbed fluxes) ---
+    # response_mode `fd_gradients` adds one perturbed sibling run per listed (channel,
+    # species) pair per flux surface, multiplying the Stage 4 job count. `none` (or
+    # removing the key) runs baseline fluxes only.
+    response_mode: none
+    # Species to perturb per channel: comma-separated quoted names drawn from the
+    # runtime species (e, D, T). A name matching no runtime species, including
+    # electrons under an adiabatic electron model, prints a warning at prepare time
+    # and generates no perturbed runs for that name, so only the unperturbed base
+    # runs execute for it.
+    # perturb_density_species: "D"       # density-gradient channel
+    # perturb_temperature_species: "D"   # temperature-gradient channel
+    # Perturbation sizes each default to 0.5 under fd_gradients mode when left unset.
+    # dkap_density: 0.5
+    # dkap_temperature: 0.5
+    # perturb_rel_step: 0.5
+
     # Used only when `device: gpu`.
     gpu_ids: "0"
 
