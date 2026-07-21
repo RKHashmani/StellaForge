@@ -142,6 +142,9 @@ The definitions below are for default values of 'nu_n', 'Delta' and 'alpha'
 - `Nx`: energy grid points.
 - Solver tolerance: `solverTolerance` (commonly around $10^{-6}$ to $10^{-10}$ depending on the case and solver path). In this `sfincs_jax` checkout, this is the main named tolerance parameter exposed in the input namelist for the linear solve.
 
+> [!NOTE]
+> **Radial-scan bridge namelist overrides.** The `sfincs_jax_radial_scan.py` bridge that the Snakemake forward pass runs does not use the template namelist verbatim; it patches a fresh copy per flux surface. It sets `RHSMode = 1`, `inputRadialCoordinate = 3` (`rN`), and `rN_wish` to the surface's rho, and it **drops** `inputRadialCoordinateForGradients` from the template so `sfincs_jax` infers the gradient coordinates on its own (species gradients supplied as `dNHatdrNs`/`dTHatdrNs` select mode 3, and the potential gradient supplied as `Er` selects mode 4). Unless overridden on the command line, it also forces the reduced quickrun smoke-test resolution `Ntheta = 5, Nzeta = 11, Nxi = 12, NL = 3, Nx = 4, solverTolerance = 1e-6`, which overrides the raw `sfincs_jax` namelist defaults listed in the field table below.
+
 **Optional input fields** :
 
 **Phi1 / Electrostatic Effects:**
@@ -300,9 +303,28 @@ The definitions below are for default values of 'nu_n', 'Delta' and 'alpha'
 ### Output Specification
 
 
-**Forward-chain handoff:** `sfincs_jax_flux_profiles.h5` (HDF5) -- aggregated flux profiles (Gamma, Q, Upar vs radius) consumed by `NEOPAX` (Stage 5).
+The Snakemake forward pass runs the `sfincs_jax` radial scan as a per-surface fan-out (`stage3_prepare` checkpoint, one `stage3_run_one` job per flux surface, then `stage3_collect`; see [Per-surface fan-out](../mvp-pipeline.md#per-surface-fan-out-stages-3-and-4)). It produces one aggregated handoff file plus a per-surface run tree.
 
-**Native SFINCS output (per surface):** `sfincsOutput.h5` (HDF5) -- the native solver file. The `sfincs_jax` radial scan writes one per flux surface and aggregates them into the handoff above; the standalone `SFINCS` (Fortran) binary writes it directly. Its fields:
+**Forward-chain handoff:** `sfincs_jax_flux_profiles.h5` (HDF5) -- flux profiles versus radius, consumed by `NEOPAX` (Stage 5). The `collect` step assembles it from every per-surface `result.json`. Its schema is the exact subset checked by the in-repo contract validator `src/io_contracts.py` (`validate_sfincs_flux`):
+
+| Dataset | Shape | Meaning |
+|---------|-------|---------|
+| `rho` | `(n_radii,)` | Normalized radial coordinate of each aggregated surface |
+| `r` | `(n_radii,)` | Radial coordinate written from `sfincs_jax`'s `rHat` (alias of `rHat`) |
+| `rHat` | `(n_radii,)` | `sfincs_jax` `rHat` radial coordinate |
+| `Gamma` | `(n_species, n_radii)` | Neoclassical particle flux in NEOPAX units |
+| `Q` | `(n_species, n_radii)` | Neoclassical heat flux in NEOPAX units |
+| `Upar` | `(n_species, n_radii)` | Parallel-flow observable |
+| `species_names` | `(n_species,)` | UTF-8 species labels (root dataset) |
+
+Root attributes:
+- `axis_zero_padded` (bool, **required** by the contract): the scan drops the magnetic-axis (`rho = 0`) surface, so when no aggregated surface sits at `rho = 0` the `collect` step prepends a zero-flux `rho = 0` column and sets this flag `true`.
+- Provenance echoes read back from the scan `manifest.json` rather than measured live: `backend`, `max_parallel`, `worker_sharding`, `profiles_source`, `source_transport_solution`, `source_sfincs_template`, `time_index`, `time_value`, `include_phi1`.
+- Unit / convention notes: `Upar_note`, `normalization_note`, `radius_note` (how `Gamma`/`Q`/`Upar` are converted to NEOPAX units and which coordinate `r`/`rHat` carries).
+
+**Per-surface run tree** (under `outputs/<run>/stage3_neoclassical/`): `manifest.json` at the stage directory records the surfaces and provenance the `collect` step reduces over; `runs/rho_*/` holds one directory per surface (basenames like `rho_012_r0p4898`), each with `input.namelist` (patched per surface), `payload.json` (worker inputs), `sfincsOutput.h5` (native per-surface solver output), and `result.json` (the extracted fluxes `collect` reads).
+
+**Native SFINCS output (per surface):** `sfincsOutput.h5` (HDF5) -- the native solver file. The `sfincs_jax` radial scan writes one per flux surface (under `runs/rho_*/`) and aggregates them into the handoff above; the standalone `SFINCS` (Fortran) binary writes it directly. Its fields:
 
 | Field | Availability | Meaning | Primary Use | Normalization | Units |
 |-------|--------------|---------|-------------|---------------|----|
@@ -447,7 +469,7 @@ pixi run stage-3-sfincs
 ```
 
 > [!NOTE]
-> The pixi task and the Snakemake `stage3_sfincs` rule both pass the wout path to `sfincs_jax` via `--wout-path`. Populate `outputs/quick_run/stage1_equilibrium/` by running `pixi run stage-1-vmec` first. The namelist's `equilibriumFile` field is retained as a fallback for the `sfincs_fortran` backend and for direct `sfincs_jax` invocations that omit `--wout-path`.
+> The pixi task and the Snakemake `stage3_prepare` checkpoint both pass the wout path to `sfincs_jax` via `--wout-path`. Populate `outputs/quick_run/stage1_equilibrium/` by running `pixi run stage-1-vmec` first. The namelist's `equilibriumFile` field is retained as a fallback for the `sfincs_fortran` backend and for direct `sfincs_jax` invocations that omit `--wout-path`.
 
 **Input:** `outputs/quick_run/stage1_equilibrium/wout_HSX_vacuum_ns201_quickrun.nc` + `inputs/quick_run/sfincs_input.HSX_vacuum_ns201_quickrun`
 **Output:** `outputs/quick_run/stage3_neoclassical/sfincs_jax_flux_profiles.h5`

@@ -140,7 +140,7 @@ Render the file-flow graph (files as nodes, rules as edges) **including the clos
 pixi run -e pipeline bash -c 'snakemake --filegraph outputs/quick_run/stage5_post_processing/converge_status.json --configfile inputs/quick_run/config.yaml | dot -Tpdf > docs/figs/stellaforge_filegraph.pdf'
 ```
 
-Omit the target to graph the plain forward pass (stops at Stage 5). Needs a one-time `pixi run -e pipeline dot -c`; see [docs/mvp-pipeline.md](docs/mvp-pipeline.md#visualizing-the-file-flow-graph) for PNG/SVG and `--rulegraph`/`--dag` variants.
+Omit the target to graph the plain forward pass (stops at Stage 5). Needs a one-time `pixi run -e pipeline dot -c`; see [docs/mvp-pipeline.md](docs/mvp-pipeline.md#visualizing-the-file-flow-graph) for PNG/SVG and `--rulegraph`/`--dag` variants, including [drawing the complete per-surface job DAG](docs/mvp-pipeline.md#drawing-the-complete-per-surface-job-dag) (the Stage 3/4 fan-out appears in `--dag` output only after the `prepare` manifests exist).
 
 <!--
 git clone https://github.com/driftless-star/driftless-star.git

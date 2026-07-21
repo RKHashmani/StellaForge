@@ -926,7 +926,28 @@ def _run_tasks_in_parallel(
         raise
 
 
-def cmd_main(args: argparse.Namespace) -> int:
+def _prepare(args: argparse.Namespace) -> tuple[dict[str, Any], list[Path]]:
+    """Build per-surface sfincs_jax inputs and the scan manifest.
+
+    Loads profiles, selects flux surfaces, and writes an ``input.namelist`` plus ``payload.json`` under
+    each ``output_dir/runs/<run_subdir>`` directory, then records ``output_dir/manifest.json`` describing
+    the scan. Reuse detection is preserved: a surface whose namelist is byte-identical to the existing
+    one and whose ``result.json`` is usable is treated as already complete and is not returned as
+    pending.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments for the prepare phase.
+
+    Returns
+    -------
+    tuple[dict[str, Any], list[Path]]
+        The manifest dict (also written to ``manifest.json``) and the ``payload.json`` paths of surfaces
+        that still need to run. Pending-ness is in-memory only and is never stored in the manifest. Each
+        ``runs`` entry records only paths relative to ``output_dir`` so a host scheduler can rebuild real
+        paths under its own view of the output directory.
+    """
     config_path = Path(args.common_config).resolve()
     cfg = _load_toml(config_path)
     species = _parse_species_from_config(cfg)
@@ -974,10 +995,9 @@ def cmd_main(args: argparse.Namespace) -> int:
         "Nx": args.nx,
     }
 
-    task_payloads: list[Path] = []
     pending_task_payloads: list[Path] = []
-    reused_runs = 0
-    for radius_index in radius_indices:
+    manifest_runs: list[dict[str, Any]] = []
+    for position, radius_index in enumerate(radius_indices):
         rho_value = float(snapshot.rho[radius_index])
         run_name = f"rho_{radius_index:03d}_r{rho_value:.4f}".replace(".", "p")
         surface_dir = run_dir / run_name
@@ -1024,47 +1044,71 @@ def cmd_main(args: argparse.Namespace) -> int:
         payload_path = surface_dir / "payload.json"
         with payload_path.open("w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2)
-        task_payloads.append(payload_path)
-        if can_reuse:
-            reused_runs += 1
-        else:
+        if not can_reuse:
             pending_task_payloads.append(payload_path)
-
-    backend = str(args.backend).lower()
-    gpu_ids = [token.strip() for token in str(args.gpu_ids).split(",") if token.strip()]
-    if backend == "gpu" and not gpu_ids:
-        gpu_ids = ["0"]
-
-    rho_min_val = float(np.min(snapshot.rho[radius_indices]))
-    rho_max_val = float(np.max(snapshot.rho[radius_indices]))
-    backend_note = f"backend={backend}"
-    parallel_note = f"max_parallel={int(args.max_parallel)}"
-    if backend == "gpu":
-        placement_note = f"gpu_ids={','.join(gpu_ids)}"
-    else:
-        placement_note = (
-            f"cores_per_run={int(args.cores_per_run)} "
-            f"worker_sharding={str(args.worker_sharding).lower()}"
-        )
-    print(
-        "[sfincs-scan] "
-        f"selected {len(radius_indices)} radii over rho in [{rho_min_val:.4f}, {rho_max_val:.4f}] "
-        f"({backend_note}, {parallel_note}, {placement_note})"
-    , flush=True)
-    if reused_runs:
-        print(
-            "[sfincs-scan] "
-            f"reusing {reused_runs}/{len(radius_indices)} existing completed runs; "
-            f"launching {len(pending_task_payloads)} new workers.",
-            flush=True,
+        manifest_runs.append(
+            {
+                "index": position,
+                "radius_index": int(radius_index),
+                "rho": rho_value,
+                "run_subdir": run_name,
+                "payload": "payload.json",
+                "result_json": "result.json",
+            }
         )
 
-    if pending_task_payloads:
-        _run_tasks_in_parallel(
-            task_payloads=pending_task_payloads,
-            args=args,
-            gpu_ids=gpu_ids,
-        )
+    manifest = {
+        "schema_version": 1,
+        "profiles_source": str(args.profiles_source),
+        "source_transport_solution": None if transport_solution is None else str(transport_solution),
+        "source_sfincs_template": str(template_path),
+        "time_index": int(args.time_index),
+        "time_value": None if snapshot.time_value is None else float(snapshot.time_value),
+        "include_phi1": args.include_phi1,
+        "backend": str(args.backend).lower(),
+        "max_parallel": int(args.max_parallel),
+        "worker_sharding": str(args.worker_sharding).lower(),
+        "benchmark_repeats": int(args.benchmark_repeats),
+        "benchmark_warmup": int(args.benchmark_warmup),
+        "species_meta": [
+            {"name": sp.name, "charge": sp.charge, "mass_mp": sp.mass_mp} for sp in species
+        ],
+        "wout_path": None if wout_path is None else str(wout_path),
+        "runs": manifest_runs,
+    }
+    manifest_path = output_dir / "manifest.json"
+    with manifest_path.open("w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2, sort_keys=True)
+
+    return manifest, pending_task_payloads
+
+
+def _collect(args: argparse.Namespace, manifest: dict[str, Any]) -> int:
+    """Reduce per-surface worker results into the Stage 3 flux-profile HDF5.
+
+    Reads each surface's ``result.json`` (located relative to ``output_dir`` from the manifest run
+    entries), stacks the flux arrays, applies the magnetic-axis zero-padding, and writes
+    ``sfincs_jax_flux_profiles.h5``. Provenance attributes are taken from the manifest rather than live
+    arguments so this phase can run independently of the process that prepared the scan.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments; only ``output_dir`` and ``plot`` are consumed.
+    manifest : dict[str, Any]
+        The scan manifest produced by :func:`_prepare`.
+
+    Returns
+    -------
+    int
+        Process exit code (0 on success).
+    """
+    output_dir = Path(args.output_dir).resolve()
+    run_dir = output_dir / "runs"
+    species = [
+        SpeciesMeta(name=meta["name"], charge=meta["charge"], mass_mp=meta["mass_mp"])
+        for meta in manifest["species_meta"]
+    ]
 
     rho_out = []
     rhat_out = []
@@ -1073,9 +1117,13 @@ def cmd_main(args: argparse.Namespace) -> int:
     upar_out = []
     raw_meta = {"Gamma_key": None, "Q_key": None, "Upar_key": None}
     benchmark_rows: list[dict[str, Any]] = []
-    for payload_path in sorted(task_payloads, key=lambda p: json.loads(p.read_text(encoding="utf-8"))["rho"]):
-        payload = json.loads(payload_path.read_text(encoding="utf-8"))
-        result_json = Path(payload["result_json"])
+    for run in sorted(manifest["runs"], key=lambda r: r["rho"]):
+        result_json = run_dir / run["run_subdir"] / run["result_json"]
+        if not result_json.exists():
+            raise FileNotFoundError(
+                f"Missing sfincs_jax worker result for run {run['run_subdir']} at {result_json}. "
+                "Run the surface before collecting."
+            )
         summary = json.loads(result_json.read_text(encoding="utf-8"))
         rho_out.append(float(summary["rho"]))
         rhat_value = summary.get("rHat")
@@ -1110,6 +1158,8 @@ def cmd_main(args: argparse.Namespace) -> int:
         upar_arr = np.concatenate([zero_flux, upar_arr], axis=1)
         axis_padded = True
 
+    time_value = manifest["time_value"]
+    include_phi1 = manifest["include_phi1"]
     out_h5 = output_dir / "sfincs_jax_flux_profiles.h5"
     with h5py.File(out_h5, "w") as f:
         f.create_dataset("r", data=rhat_arr)
@@ -1119,15 +1169,17 @@ def cmd_main(args: argparse.Namespace) -> int:
         f.create_dataset("Q", data=q_arr)
         f.create_dataset("Upar", data=upar_arr)
         f.create_dataset("species_names", data=np.asarray([sp.name.encode("utf-8") for sp in species]))
-        f.attrs["profiles_source"] = str(args.profiles_source)
-        f.attrs["source_transport_solution"] = "" if transport_solution is None else str(transport_solution)
-        f.attrs["source_sfincs_template"] = str(template_path)
-        f.attrs["time_index"] = int(args.time_index)
-        f.attrs["time_value"] = np.nan if snapshot.time_value is None else float(snapshot.time_value)
-        f.attrs["backend"] = backend
-        f.attrs["max_parallel"] = int(args.max_parallel)
-        f.attrs["worker_sharding"] = str(args.worker_sharding).lower()
-        f.attrs["include_phi1"] = bool(args.include_phi1) if args.include_phi1 is not None else -1
+        f.attrs["profiles_source"] = str(manifest["profiles_source"])
+        f.attrs["source_transport_solution"] = (
+            "" if manifest["source_transport_solution"] is None else str(manifest["source_transport_solution"])
+        )
+        f.attrs["source_sfincs_template"] = str(manifest["source_sfincs_template"])
+        f.attrs["time_index"] = int(manifest["time_index"])
+        f.attrs["time_value"] = np.nan if time_value is None else float(time_value)
+        f.attrs["backend"] = str(manifest["backend"])
+        f.attrs["max_parallel"] = int(manifest["max_parallel"])
+        f.attrs["worker_sharding"] = str(manifest["worker_sharding"])
+        f.attrs["include_phi1"] = bool(include_phi1) if include_phi1 is not None else -1
         f.attrs["axis_zero_padded"] = bool(axis_padded)
         for key, value in raw_meta.items():
             if value is not None:
@@ -1191,16 +1243,87 @@ def cmd_main(args: argparse.Namespace) -> int:
     return 0
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        description=(
-            __doc__
-            + "\n\n"
-            + "Unless overridden on the command line, this script forces the following "
-            + "sfincs_jax resolution settings (quickrun smoke test): "
-            + "Ntheta=5, Nzeta=11, Nxi=12, NL=3, Nx=4, solverTolerance=1e-6."
+def cmd_main(args: argparse.Namespace) -> int:
+    manifest, pending_task_payloads = _prepare(args)
+
+    backend = str(args.backend).lower()
+    gpu_ids = [token.strip() for token in str(args.gpu_ids).split(",") if token.strip()]
+    if backend == "gpu" and not gpu_ids:
+        gpu_ids = ["0"]
+
+    runs = manifest["runs"]
+    total_runs = len(runs)
+    reused_runs = total_runs - len(pending_task_payloads)
+    rho_values = [run["rho"] for run in runs]
+    rho_min_val = float(min(rho_values))
+    rho_max_val = float(max(rho_values))
+    backend_note = f"backend={backend}"
+    parallel_note = f"max_parallel={int(args.max_parallel)}"
+    if backend == "gpu":
+        placement_note = f"gpu_ids={','.join(gpu_ids)}"
+    else:
+        placement_note = (
+            f"cores_per_run={int(args.cores_per_run)} "
+            f"worker_sharding={str(args.worker_sharding).lower()}"
         )
+    print(
+        "[sfincs-scan] "
+        f"selected {total_runs} radii over rho in [{rho_min_val:.4f}, {rho_max_val:.4f}] "
+        f"({backend_note}, {parallel_note}, {placement_note})"
+    , flush=True)
+    if reused_runs:
+        print(
+            "[sfincs-scan] "
+            f"reusing {reused_runs}/{total_runs} existing completed runs; "
+            f"launching {len(pending_task_payloads)} new workers.",
+            flush=True,
+        )
+
+    if pending_task_payloads:
+        _run_tasks_in_parallel(
+            task_payloads=pending_task_payloads,
+            args=args,
+            gpu_ids=gpu_ids,
+        )
+
+    return _collect(args, manifest)
+
+
+def cmd_prepare(args: argparse.Namespace) -> int:
+    _prepare(args)
+    return 0
+
+
+def cmd_run_one(args: argparse.Namespace) -> int:
+    payload_path = Path(args.payload).resolve()
+    gpu_id = None
+    if str(args.backend).lower() == "gpu":
+        gpu_tokens = [token.strip() for token in str(args.gpu_ids).split(",") if token.strip()]
+        gpu_id = gpu_tokens[0] if gpu_tokens else "0"
+    env = _build_worker_env(args, gpu_id=gpu_id)
+    proc = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "--worker-payload", str(payload_path)],
+        env=env,
     )
+    return proc.returncode
+
+
+def cmd_collect(args: argparse.Namespace) -> int:
+    manifest_path = Path(args.output_dir).resolve() / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(
+            f"No manifest.json found at {manifest_path}. Run the prepare phase before collecting."
+        )
+    with manifest_path.open("r", encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    return _collect(args, manifest)
+
+
+def _add_output_dir(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Output directory for runs and collected fluxes.")
+
+
+def _add_io_and_shaping(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--common-config",
         default=str(DEFAULT_COMMON_CONFIG),
@@ -1228,7 +1351,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(DEFAULT_SFINCS_TEMPLATE),
         help="Template sfincs_jax input.namelist.",
     )
-    p.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Output directory for runs and collected fluxes.")
+    _add_output_dir(p)
     p.add_argument("--time-index", type=int, default=-1, help="Time index in transport_solution.h5. Default: final.")
     p.add_argument("--rho-indices", default=None, help="Comma-separated explicit rho indices.")
     p.add_argument("--rho-min", type=float, default=None, help="Minimum rho to include.")
@@ -1244,16 +1367,34 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--nl", type=int, default=3, help="Override NL. Default: 3.")
     p.add_argument("--nx", type=int, default=4, help="Override Nx. Default: 4.")
     p.add_argument("--solver-tolerance", type=float, default=1.0e-6, help="Override solverTolerance. Default: 1e-6.")
+
+
+def _add_dense_fp_max(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--dense-fp-max",
         type=int,
         default=None,
         help="Set SFINCS_JAX_RHSMODE1_DENSE_FP_MAX for worker processes.",
     )
+
+
+def _add_backend(p: argparse.ArgumentParser) -> None:
     p.add_argument("--backend", choices=("cpu", "gpu"), default="cpu", help="Parallel execution backend.")
+
+
+def _add_gpu_ids(p: argparse.ArgumentParser) -> None:
     p.add_argument("--gpu-ids", default="0", help="Comma-separated GPU ids for backend=gpu.")
+
+
+def _add_max_parallel(p: argparse.ArgumentParser) -> None:
     p.add_argument("--max-parallel", type=int, default=8, help="Maximum concurrent sfincs_jax runs.")
+
+
+def _add_cores_per_run(p: argparse.ArgumentParser) -> None:
     p.add_argument("--cores-per-run", type=int, default=1, help="CPU cores per run for backend=cpu.")
+
+
+def _add_worker_sharding(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--worker-sharding",
         choices=("off", "auto", "theta", "zeta", "x", "flat"),
@@ -1263,6 +1404,9 @@ def build_parser() -> argparse.ArgumentParser:
             "Default: off."
         ),
     )
+
+
+def _add_benchmark(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--benchmark-repeats",
         type=int,
@@ -1275,9 +1419,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Number of same-worker warmup solves to discard before benchmark repeats.",
     )
+
+
+def _add_plot(p: argparse.ArgumentParser) -> None:
     p.add_argument("--plot", dest="plot", action="store_true", help="Write PNG plots of Gamma, Q, and Upar versus rho.")
     p.add_argument("--no-plot", dest="plot", action="store_false", help="Skip PNG plots.")
     p.set_defaults(plot=True)
+
+
+def _add_verbose_workers(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--verbose-workers",
         dest="verbose_workers",
@@ -1291,7 +1441,60 @@ def build_parser() -> argparse.ArgumentParser:
         help="Silence sfincs_jax worker logging.",
     )
     p.set_defaults(verbose_workers=True)
+
+
+def _add_worker_payload(p: argparse.ArgumentParser) -> None:
     p.add_argument("--worker-payload", default=None, help=argparse.SUPPRESS)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description=(
+            __doc__
+            + "\n\n"
+            + "Unless overridden on the command line, this script forces the following "
+            + "sfincs_jax resolution settings (quickrun smoke test): "
+            + "Ntheta=5, Nzeta=11, Nxi=12, NL=3, Nx=4, solverTolerance=1e-6."
+        )
+    )
+    _add_io_and_shaping(p)
+    _add_dense_fp_max(p)
+    _add_backend(p)
+    _add_gpu_ids(p)
+    _add_max_parallel(p)
+    _add_cores_per_run(p)
+    _add_worker_sharding(p)
+    _add_benchmark(p)
+    _add_plot(p)
+    _add_verbose_workers(p)
+    _add_worker_payload(p)
+    p.set_defaults(func=cmd_main)
+
+    sub = p.add_subparsers(dest="command", required=False)
+
+    prepare = sub.add_parser("prepare", help="Write per-surface sfincs_jax inputs and the scan manifest.")
+    _add_io_and_shaping(prepare)
+    _add_backend(prepare)
+    _add_max_parallel(prepare)
+    _add_worker_sharding(prepare)
+    _add_benchmark(prepare)
+    _add_verbose_workers(prepare)
+    prepare.set_defaults(func=cmd_prepare)
+
+    run_one = sub.add_parser("run-one", help=argparse.SUPPRESS)
+    run_one.add_argument("--payload", required=True, help="Path to a per-surface payload.json to execute.")
+    _add_dense_fp_max(run_one)
+    _add_backend(run_one)
+    _add_gpu_ids(run_one)
+    _add_cores_per_run(run_one)
+    _add_worker_sharding(run_one)
+    run_one.set_defaults(func=cmd_run_one)
+
+    collect = sub.add_parser("collect", help="Reduce per-surface results into the flux-profile HDF5.")
+    _add_output_dir(collect)
+    _add_plot(collect)
+    collect.set_defaults(func=cmd_collect)
+
     return p
 
 
@@ -1299,7 +1502,7 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.worker_payload:
         return _run_single_worker_from_payload(Path(args.worker_payload).resolve())
-    return cmd_main(args)
+    return args.func(args)
 
 
 if __name__ == "__main__":

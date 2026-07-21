@@ -1,5 +1,8 @@
 # driftless-star MVP Snakemake workflow
 
+import json
+import posixpath
+
 from src import stage3_helper, stage4_helper, stage5_helper
 from src.utils import resolve_pipeline_paths, RESOLVED_COMMON_CONFIG
 
@@ -47,8 +50,10 @@ S1_INPUT  = P["s1_input"]
 S1_OUTPUT = P["s1_output"]
 S2_OUTPUT = P["s2_output"]
 S3_CONFIG = P["s3_config"]
+S3_MANIFEST = P["stage3_manifest"]
 S3_OUTPUT = P["s3_output"]
 S4_CONFIG = P["s4_config"]
+S4_MANIFEST = P["stage4_manifest"]
 S4_OUTPUT = P["s4_output"]
 S5_CONFIG = P["s5_config"]
 S5_OUTPUT = P["s5_output"]
@@ -96,17 +101,22 @@ rule stage2_boozer:
         "python stages/stage2-boozer/run_boozer.py --wout {input} --output {output}"
         " 2>&1 | tee {log}"
 
-rule stage3_sfincs:
+
+# Per-surface run-directory basenames e.g. rho_012_r0p4898 follow the pattern:
+# zero-padded radial-grid index then the normalized flux-surface radius (e.g. rho=0.4898).
+SURF_PATTERN = r"rho_\d+_r[0-9p]+"
+
+checkpoint stage3_prepare:
     input:
         config_file = S3_CONFIG,
         wout        = S1_OUTPUT,
         common_config = S5_CONFIG,
     output:
-        S3_OUTPUT,
+        S3_MANIFEST,
     log:
-        f"{P['stage3_dir']}/{RUN_NAME}.log"
+        f"{P['stage3_dir']}/{RUN_NAME}.prepare.log"
     shell:
-        stage3_helper.radial_scan_cmd(
+        stage3_helper.prepare_cmd(
             docker_prefix=DOCKER_PREFIX,
             image=STAGE3_JAX_IMG,
             stage_cfg=STAGE3_CFG,
@@ -114,18 +124,112 @@ rule stage3_sfincs:
             device=DEVICE,
         ) + " 2>&1 | tee {log}"
 
-rule stage4_spectrax:
+rule stage3_run_one:
+    input:
+        manifest = S3_MANIFEST,
+    output:
+        f"{P['stage3_dir']}/runs/{{surf}}/result.json",
+    wildcard_constraints:
+        surf = SURF_PATTERN,
+    log:
+        f"{P['stage3_dir']}/runs/{{surf}}/run.log"
+    shell:
+        stage3_helper.run_one_cmd(
+            docker_prefix=DOCKER_PREFIX,
+            image=STAGE3_JAX_IMG,
+            stage_cfg=STAGE3_CFG,
+            output_dir=P["stage3_dir"],
+            device=DEVICE,
+        ) + " 2>&1 | tee {log}"
+
+def stage3_surface_results(wildcards):
+    """List every per-surface result.json named by the Stage 3 manifest."""
+    manifest_path = checkpoints.stage3_prepare.get().output[0]
+    with open(manifest_path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    return [
+        f"{P['stage3_dir']}/runs/{run['run_subdir']}/result.json"
+        for run in manifest["runs"]
+    ]
+
+rule stage3_collect:
+    input:
+        manifest = S3_MANIFEST,
+        results  = stage3_surface_results,
+    output:
+        S3_OUTPUT,
+    log:
+        f"{P['stage3_dir']}/{RUN_NAME}.collect.log"
+    shell:
+        stage3_helper.collect_cmd(
+            docker_prefix=DOCKER_PREFIX,
+            image=STAGE3_JAX_IMG,
+            stage_cfg=STAGE3_CFG,
+            output_dir=P["stage3_dir"],
+            device=DEVICE,
+        ) + " 2>&1 | tee {log}"
+
+checkpoint stage4_prepare:
     input:
         config_file = S4_CONFIG,
         wout        = S1_OUTPUT,
         boozer      = S2_OUTPUT,
         common_config = S5_CONFIG,
     output:
+        S4_MANIFEST,
+    log:
+        f"{P['stage4_dir']}/{RUN_NAME}.prepare.log"
+    shell:
+        stage4_helper.prepare_cmd(
+            docker_prefix=DOCKER_PREFIX,
+            image=STAGE4_IMG,
+            stage_cfg=STAGE4_CFG,
+            output_dir=P["stage4_dir"],
+            device=DEVICE,
+        ) + " 2>&1 | tee {log}"
+
+rule stage4_run_one:
+    input:
+        manifest = S4_MANIFEST,
+    output:
+        f"{P['stage4_dir']}/runs/{{surf}}/run.diagnostics.csv",
+    wildcard_constraints:
+        surf = SURF_PATTERN,
+    log:
+        f"{P['stage4_dir']}/runs/{{surf}}/run.log"
+    shell:
+        stage4_helper.run_one_cmd(
+            docker_prefix=DOCKER_PREFIX,
+            image=STAGE4_IMG,
+            stage_cfg=STAGE4_CFG,
+            output_dir=P["stage4_dir"],
+            device=DEVICE,
+        ) + " 2>&1 | tee {log}"
+
+def stage4_surface_diagnostics(wildcards):
+    """List every per-surface diagnostics CSV named by the Stage 4 manifest.
+
+    Stage 4 manifest entries carry no run_subdir key, only the container-absolute
+    run_dir, so the host-side path is rebuilt from its POSIX basename.
+    """
+    manifest_path = checkpoints.stage4_prepare.get().output[0]
+    with open(manifest_path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    return [
+        f"{P['stage4_dir']}/runs/{posixpath.basename(run['run_dir'])}/run.diagnostics.csv"
+        for run in manifest["runs"]
+    ]
+
+rule stage4_collect:
+    input:
+        manifest = S4_MANIFEST,
+        diagnostics = stage4_surface_diagnostics,
+    output:
         S4_OUTPUT,
     log:
-        f"{P['stage4_dir']}/{RUN_NAME}.log"
+        f"{P['stage4_dir']}/{RUN_NAME}.collect.log"
     shell:
-        stage4_helper.radial_scan_cmd(
+        stage4_helper.collect_cmd(
             docker_prefix=DOCKER_PREFIX,
             image=STAGE4_IMG,
             stage_cfg=STAGE4_CFG,

@@ -964,6 +964,11 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     common_config = Path(args.common_config).resolve()
     spectrax_root = Path(args.spectrax_root).resolve()
     output_dir = Path(args.output_dir).resolve()
+    # Anchor a relative --spectrax-template at the invocation CWD like every other CLI path
+    # argument; the template resolver downstream would otherwise anchor it at the
+    # common-config directory and mangle CWD-relative values.
+    if args.spectrax_template:
+        args.spectrax_template = str(Path(args.spectrax_template).resolve())
 
     cfg = _load_toml(common_config)
     species = _parse_species_from_common_config(cfg)
@@ -1042,9 +1047,47 @@ def _has_completed_output(run_spec: dict[str, Any]) -> bool:
     return bool(times.size > 0)
 
 
+def _apply_backend_env(
+    env: dict[str, str],
+    backend: str,
+    gpu_id: int | str | None,
+    threads_per_run: int | None,
+) -> dict[str, str]:
+    # SPECTRAX workers pick their JAX device and thread count from these variables. The parallel
+    # launcher and the single-run worker both route through here so a CPU/GPU slot is configured the
+    # same way no matter which path started the run. A missing GPU id maps to device 0 and a missing
+    # CPU thread count maps to a single thread, matching the launcher's per-slot defaults.
+    mode = str(backend).lower()
+    if mode == "gpu":
+        env["CUDA_VISIBLE_DEVICES"] = str(0 if gpu_id is None else gpu_id)
+        env["JAX_PLATFORM_NAME"] = "gpu"
+        env["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    else:
+        env["JAX_PLATFORM_NAME"] = "cpu"
+        env["OMP_NUM_THREADS"] = str(1 if threads_per_run is None else int(threads_per_run))
+    return env
+
+
+def _resolve_run_spec(manifest: dict[str, Any], *, index: int | None, run_name: str | None) -> dict[str, Any]:
+    # A per-surface run can be selected either by its manifest ordinal or by its directory name, where
+    # the name is the basename of run_dir (the rho_{idx}_r{value} surface folder). Exactly one selector
+    # must be supplied so the worker targets a single, unambiguous surface.
+    if (index is None) == (run_name is None):
+        raise ValueError("run-one requires exactly one of --index or --run-name")
+    runs = manifest["runs"]
+    if index is not None:
+        return runs[int(index)]
+    matches = [run for run in runs if os.path.basename(str(run["run_dir"])) == run_name]
+    if len(matches) != 1:
+        raise ValueError(
+            f"--run-name {run_name!r} matched {len(matches)} runs in the manifest; expected exactly one"
+        )
+    return matches[0]
+
+
 def cmd_run_one(args: argparse.Namespace) -> int:
     manifest = _load_manifest(Path(args.manifest).resolve())
-    run_spec = manifest["runs"][int(args.index)]
+    run_spec = _resolve_run_spec(manifest, index=args.index, run_name=getattr(args, "run_name", None))
     if _has_completed_output(run_spec):
         diag_csv = _diagnostics_csv_path(run_spec)
         row = _read_last_row_csv(diag_csv)
@@ -1074,6 +1117,18 @@ def cmd_run_one(args: argparse.Namespace) -> int:
     env["PYTHONPATH"] = (
         str(src_path) if not existing_pythonpath else os.pathsep.join([str(src_path), existing_pythonpath])
     )
+    # When the parallel launcher starts this worker it exports the backend selectors into the
+    # environment already, so --backend is omitted and the inherited variables are left untouched.
+    # A direct invocation with --backend configures those selectors here instead. --gpu-ids may
+    # carry a comma-separated list; a single surface consumes a single device, so only the first
+    # id is pinned and the rest are ignored.
+    backend = getattr(args, "backend", None)
+    if backend is not None:
+        gpu_id = None
+        if str(backend).lower() == "gpu":
+            gpu_tokens = [token.strip() for token in str(getattr(args, "gpu_ids", None) or "").split(",") if token.strip()]
+            gpu_id = gpu_tokens[0] if gpu_tokens else None
+        _apply_backend_env(env, backend, gpu_id, getattr(args, "threads_per_run", None))
     cmd = [
         sys.executable,
         "-m",
@@ -1200,13 +1255,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         env = {
             "PYTHONPATH": str((Path(manifest["spectrax_root"]) / "src").resolve()),
         }
-        if mode == "gpu":
-            env["CUDA_VISIBLE_DEVICES"] = str(gpu_ids[slot % len(gpu_ids)])
-            env["JAX_PLATFORM_NAME"] = "gpu"
-            env["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-        else:
-            env["JAX_PLATFORM_NAME"] = "cpu"
-            env["OMP_NUM_THREADS"] = str(int(args.threads_per_run))
+        gpu_id = gpu_ids[slot % len(gpu_ids)] if mode == "gpu" else None
+        _apply_backend_env(env, mode, gpu_id, args.threads_per_run)
         return env
 
     while pending or active:
@@ -1855,121 +1905,150 @@ def cmd_all(args: argparse.Namespace) -> int:
     return collect_rc
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument(
+def _add_common_io_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
         "--common-config",
         default=str(DEFAULT_COMMON_CONFIG),
         help="Path to the shared common_input TOML.",
     )
-    p.add_argument("--neopax-result", default=None, help="Optional explicit path to transport_solution.h5")
-    p.add_argument(
+    parser.add_argument("--neopax-result", default=None, help="Optional explicit path to transport_solution.h5")
+    parser.add_argument(
         "--output-dir",
         default=str(DEFAULT_OUTPUT_DIR),
         help="Directory for manifest, SPECTRAX outputs, and collected fluxes",
     )
-    p.add_argument("--spectrax-root", default=str(DEFAULT_SPECTRAX_ROOT))
-    p.add_argument(
+    parser.add_argument("--spectrax-root", default=str(DEFAULT_SPECTRAX_ROOT))
+    parser.add_argument(
         "--spectrax-template",
         default=str(DEFAULT_SPECTRAX_TEMPLATE),
         help="Base SPECTRAX runtime TOML used as the model template",
     )
-    p.add_argument("--profiles-source", choices=("transport_h5", "analytical"), default="analytical")
-    p.add_argument("--time-index", type=int, default=-1)
-    p.add_argument("--analytical-n-radii", type=int, default=None, help="Number of analytical rho points; defaults to [geometry].n_radial from the NEOPAX config")
-    p.add_argument("--electron-model", choices=("adiabatic", "kinetic"), default=None)
-    p.add_argument("--reference-ion", default=None)
-    p.add_argument("--rho-indices", default=None)
-    p.add_argument("--rho-min", type=float, default=0.0)
-    p.add_argument("--rho-max", type=float, default=1.0)
-    p.add_argument("--num-radii", type=int, default=-1, help="Number of radii to sample; use <=0 for all available nonzero radii")
-    p.add_argument("--vmec-file-override", default=None)
-    p.add_argument("--boozer-file-override", default=None)
-    p.add_argument("--density-floor", type=float, default=1.0e-8)
-    p.add_argument("--temperature-floor", type=float, default=1.0e-8)
-    p.add_argument("--gradient-coordinate", choices=("rho", "torflux", "rho_with_scale"), default="rho")
-    p.add_argument("--gradient-scale", type=float, default=1.0)
-    p.add_argument("--tprim-scale", type=float, default=1.0)
-    p.add_argument("--fprim-scale", type=float, default=1.0)
-    p.add_argument("--tau-e-override", type=float, default=None)
-    p.add_argument("--nu-ion", type=float, default=0.01)
-    p.add_argument("--nu-electron", type=float, default=0.0)
-    p.add_argument("--nx", type=int, default=12, help="Nonlinear spectral resolution in kx / x")
-    p.add_argument("--ny", type=int, default=12, help="Nonlinear spectral resolution in ky / y")
-    p.add_argument("--nz", type=int, default=None, help="Parallel/grid resolution in z")
-    p.add_argument("--lx", type=float, default=None)
-    p.add_argument("--ly", type=float, default=None)
-    p.add_argument("--boundary", default=None)
-    p.add_argument("--y0", type=float, default=None)
-    p.add_argument("--ntheta", type=int, default=30, help="Number of theta points for generated VMEC geometry")
-    p.add_argument("--nperiod", type=int, default=None)
-    p.add_argument("--t-max", type=float, default=10.0)
-    p.add_argument("--t-final", dest="t_max", type=float, help="Alias for --t-max")
-    p.add_argument("--dt", type=float, default=None)
-    p.add_argument("--method", default=None)
-    p.add_argument("--use-diffrax", action=argparse.BooleanOptionalAction, default=None)
-    p.add_argument("--fixed-dt", action=argparse.BooleanOptionalAction, default=None)
-    p.add_argument("--sample-stride", type=int, default=50)
-    p.add_argument("--diagnostics-stride", type=int, default=1)
-    p.add_argument("--chunk-steps", type=int, default=None, help="Adaptive nonlinear chunk size in steps for each SPECTRAX run")
-    p.add_argument("--cfl", type=float, default=None)
-    p.add_argument("--state-sharding", default=None)
-    p.add_argument("--ky", type=float, default=None, help="Default nonlinear reference ky retained unless overridden")
-    p.add_argument("--nl", type=int, default=None)
-    p.add_argument("--nm", type=int, default=None)
-    p.add_argument("--init-field", default=None)
-    p.add_argument("--init-amp", type=float, default=None)
-    p.add_argument("--alpha", type=float, default=None, help="Field-line label alpha for the local geometry")
-    p.add_argument("--npol", type=float, default=None)
-    p.add_argument("--beta", type=float, default=None)
-    p.add_argument("--nu-hermite", type=float, default=None)
-    p.add_argument("--nu-laguerre", type=float, default=None)
-    p.add_argument("--nu-hyper", type=float, default=None)
-    p.add_argument("--p-hyper", type=float, default=None)
-    p.add_argument("--hypercollisions-const", type=float, default=None)
-    p.add_argument("--hypercollisions-kz", type=float, default=None)
-    p.add_argument("--d-hyper", type=float, default=None)
-    p.add_argument("--damp-ends-amp", type=float, default=None)
-    p.add_argument("--damp-ends-widthfrac", type=float, default=None)
-    p.add_argument("--hyperdiffusion", type=float, default=None)
-    p.add_argument("--normalization-contract", default=None)
-    p.add_argument("--diagnostic-norm", default=None)
-    p.add_argument("--rho-star-physical", type=float, default=None, help="Optional manual rho_star override; otherwise derive it per radius from VMEC geometry and the reference-ion profile")
-    p.add_argument("--average-window", type=float, default=1.0, help="Average turbulent fluxes over the final time window")
-    p.add_argument("--plot", dest="plot", action="store_true", help="Write PNG plots of Gamma and Q versus rho.")
-    p.add_argument("--no-plot", dest="plot", action="store_false", help="Skip PNG plots.")
-    p.set_defaults(plot=True)
-    p.add_argument(
+
+
+def _add_prepare_shaping_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--profiles-source", choices=("transport_h5", "analytical"), default="analytical")
+    parser.add_argument("--time-index", type=int, default=-1)
+    parser.add_argument("--analytical-n-radii", type=int, default=None, help="Number of analytical rho points; defaults to [geometry].n_radial from the NEOPAX config")
+    parser.add_argument("--electron-model", choices=("adiabatic", "kinetic"), default=None)
+    parser.add_argument("--reference-ion", default=None)
+    parser.add_argument("--rho-indices", default=None)
+    parser.add_argument("--rho-min", type=float, default=0.0)
+    parser.add_argument("--rho-max", type=float, default=1.0)
+    parser.add_argument("--num-radii", type=int, default=-1, help="Number of radii to sample; use <=0 for all available nonzero radii")
+    parser.add_argument("--vmec-file-override", default=None)
+    parser.add_argument("--boozer-file-override", default=None)
+    parser.add_argument("--density-floor", type=float, default=1.0e-8)
+    parser.add_argument("--temperature-floor", type=float, default=1.0e-8)
+    parser.add_argument("--gradient-coordinate", choices=("rho", "torflux", "rho_with_scale"), default="rho")
+    parser.add_argument("--gradient-scale", type=float, default=1.0)
+    parser.add_argument("--tprim-scale", type=float, default=1.0)
+    parser.add_argument("--fprim-scale", type=float, default=1.0)
+    parser.add_argument("--tau-e-override", type=float, default=None)
+    parser.add_argument("--nu-ion", type=float, default=0.01)
+    parser.add_argument("--nu-electron", type=float, default=0.0)
+    parser.add_argument("--nx", type=int, default=12, help="Nonlinear spectral resolution in kx / x")
+    parser.add_argument("--ny", type=int, default=12, help="Nonlinear spectral resolution in ky / y")
+    parser.add_argument("--nz", type=int, default=None, help="Parallel/grid resolution in z")
+    parser.add_argument("--lx", type=float, default=None)
+    parser.add_argument("--ly", type=float, default=None)
+    parser.add_argument("--boundary", default=None)
+    parser.add_argument("--y0", type=float, default=None)
+    parser.add_argument("--ntheta", type=int, default=30, help="Number of theta points for generated VMEC geometry")
+    parser.add_argument("--nperiod", type=int, default=None)
+    parser.add_argument("--t-max", type=float, default=10.0)
+    parser.add_argument("--t-final", dest="t_max", type=float, help="Alias for --t-max")
+    parser.add_argument("--dt", type=float, default=None)
+    parser.add_argument("--method", default=None)
+    parser.add_argument("--use-diffrax", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--fixed-dt", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--sample-stride", type=int, default=50)
+    parser.add_argument("--diagnostics-stride", type=int, default=1)
+    parser.add_argument("--chunk-steps", type=int, default=None, help="Adaptive nonlinear chunk size in steps for each SPECTRAX run")
+    parser.add_argument("--cfl", type=float, default=None)
+    parser.add_argument("--state-sharding", default=None)
+    parser.add_argument("--ky", type=float, default=None, help="Default nonlinear reference ky retained unless overridden")
+    parser.add_argument("--nl", type=int, default=None)
+    parser.add_argument("--nm", type=int, default=None)
+    parser.add_argument("--init-field", default=None)
+    parser.add_argument("--init-amp", type=float, default=None)
+    parser.add_argument("--alpha", type=float, default=None, help="Field-line label alpha for the local geometry")
+    parser.add_argument("--npol", type=float, default=None)
+    parser.add_argument("--beta", type=float, default=None)
+    parser.add_argument("--nu-hermite", type=float, default=None)
+    parser.add_argument("--nu-laguerre", type=float, default=None)
+    parser.add_argument("--nu-hyper", type=float, default=None)
+    parser.add_argument("--p-hyper", type=float, default=None)
+    parser.add_argument("--hypercollisions-const", type=float, default=None)
+    parser.add_argument("--hypercollisions-kz", type=float, default=None)
+    parser.add_argument("--d-hyper", type=float, default=None)
+    parser.add_argument("--damp-ends-amp", type=float, default=None)
+    parser.add_argument("--damp-ends-widthfrac", type=float, default=None)
+    parser.add_argument("--hyperdiffusion", type=float, default=None)
+    parser.add_argument("--normalization-contract", default=None)
+    parser.add_argument("--diagnostic-norm", default=None)
+    parser.add_argument("--rho-star-physical", type=float, default=None, help="Optional manual rho_star override; otherwise derive it per radius from VMEC geometry and the reference-ion profile")
+
+
+def _add_collect_tuning_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--average-window", type=float, default=1.0, help="Average turbulent fluxes over the final time window")
+    parser.add_argument("--plot", dest="plot", action="store_true", help="Write PNG plots of Gamma and Q versus rho.")
+    parser.add_argument("--no-plot", dest="plot", action="store_false", help="Skip PNG plots.")
+    parser.set_defaults(plot=True)
+    parser.add_argument(
         "--plot-run-heat-traces",
         dest="plot_run_heat_traces",
         action="store_true",
         help="Write per-run heat-flux time-trace PNGs from existing diagnostics CSV files.",
     )
-    p.add_argument(
+    parser.add_argument(
         "--no-plot-run-heat-traces",
         dest="plot_run_heat_traces",
         action="store_false",
         help="Skip per-run heat-flux time-trace PNGs.",
     )
-    p.set_defaults(plot_run_heat_traces=True)
-    p.add_argument("--backend", choices=("cpu", "gpu"), default="cpu")
-    p.add_argument("--gpu-ids", default="0")
-    p.add_argument("--max-parallel", type=int, default=1)
-    p.add_argument("--threads-per-run", type=int, default=1)
-    p.add_argument("--poll-interval", type=float, default=2.0)
-    p.add_argument(
+    parser.set_defaults(plot_run_heat_traces=True)
+
+
+def _add_collect_io_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--manifest", required=True, help="Path to the prepare-stage manifest.json")
+    parser.add_argument("--out", required=True, help="Destination flux_summary.h5 path")
+    parser.add_argument("--neopax-flux-out", required=True, help="Destination neopax_fluxes.h5 path")
+    parser.add_argument(
+        "--t-final",
+        dest="t_final",
+        type=float,
+        default=None,
+        help="Final time to average up to; falls back to the manifest t_max",
+    )
+
+
+def _add_run_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--backend", choices=("cpu", "gpu"), default="cpu")
+    parser.add_argument("--gpu-ids", default="0")
+    parser.add_argument("--max-parallel", type=int, default=1)
+    parser.add_argument("--threads-per-run", type=int, default=1)
+    parser.add_argument("--poll-interval", type=float, default=2.0)
+    parser.add_argument(
         "--verbose-workers",
         dest="verbose_workers",
         action="store_true",
         help="Show the stdout/stderr from each SPECTRAX worker run",
     )
-    p.add_argument(
+    parser.add_argument(
         "--no-verbose-workers",
         dest="verbose_workers",
         action="store_false",
         help="Silence SPECTRAX worker stdout/stderr.",
     )
-    p.set_defaults(verbose_workers=True)
+    parser.set_defaults(verbose_workers=True)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description=__doc__)
+    _add_common_io_args(p)
+    _add_prepare_shaping_args(p)
+    _add_collect_tuning_args(p)
+    _add_run_args(p)
     p.add_argument(
         "--collect-even-if-failures",
         action=argparse.BooleanOptionalAction,
@@ -1979,10 +2058,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_all)
 
     sub = p.add_subparsers(dest="cmd", required=False)
+
+    prepare = sub.add_parser("prepare", help="Build the per-radius manifest and SPECTRAX runtime TOMLs.")
+    _add_common_io_args(prepare)
+    _add_prepare_shaping_args(prepare)
+    prepare.set_defaults(func=cmd_prepare)
+
+    collect = sub.add_parser("collect", help="Reduce per-radius diagnostics into NEOPAX-unit flux HDF5 files.")
+    _add_collect_io_args(collect)
+    _add_collect_tuning_args(collect)
+    collect.set_defaults(func=cmd_collect)
+
     run_one = sub.add_parser("run-one", help=argparse.SUPPRESS)
     run_one.add_argument("--manifest", required=True)
-    run_one.add_argument("--index", required=True, type=int)
+    run_one.add_argument("--index", type=int, default=None)
+    run_one.add_argument("--run-name", default=None, help="Per-surface run_dir basename to execute instead of --index")
     run_one.add_argument("--verbose-worker", action="store_true")
+    run_one.add_argument("--backend", choices=("cpu", "gpu"), default=None)
+    run_one.add_argument("--gpu-ids", default=None, help="Comma-separated GPU ids; the worker pins the first one.")
+    run_one.add_argument("--threads-per-run", type=int, default=None)
     run_one.set_defaults(func=cmd_run_one)
     return p
 
