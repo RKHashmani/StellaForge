@@ -19,7 +19,10 @@ planned DAG is the same everywhere.
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
+import time
 from pathlib import Path
 
 import yaml
@@ -96,3 +99,56 @@ def test_invalid_device_fails_at_parse(tmp_path: Path) -> None:
     assert result.returncode != 0, output
     # The Snakefile's parse-time device guard rejects anything but cpu/gpu.
     assert "must be 'cpu' or 'gpu'" in output, output
+
+
+# A perturbed fd_gradients sibling run-directory must be schedulable by stage4_run_one exactly like a baseline
+# surface: its basename satisfies the shared SURF_PATTERN wildcard constraint, so asking Snakemake to build that
+# run.diagnostics.csv plans the per-surface rule. A sibling whose channel letter falls outside n/t violates the
+# constraint, so no rule can produce it and the DAG build aborts at parse time.
+def test_perturbed_surface_target_matches_run_one(tmp_path: Path) -> None:
+    config = yaml.safe_load((REPO_ROOT / "inputs/quick_run/config.yaml").read_text())
+    stage4_dir = resolve_pipeline_paths(config, output_dir=f"{tmp_path}/out")["stage4_dir"]
+    good = f"{stage4_dir}/runs/rho_003_r0p2500_fd_n_D/run.diagnostics.csv"
+    result = _dry_run(tmp_path, targets=[good], config_overrides=[])
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "stage4_run_one" in output, output
+    # A malformed sibling (fd_x is not a valid density/temperature channel) matches no rule.
+    bad = f"{stage4_dir}/runs/rho_003_r0p2500_fd_x_D/run.diagnostics.csv"
+    result = _dry_run(tmp_path, targets=[bad], config_overrides=[])
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "No rule to produce" in output, output
+
+
+# With a real manifest on disk and its upstream equilibrium and Boozer outputs already present, the stage4_prepare
+# checkpoint is up to date, so a dry run expands its gather and schedules one stage4_run_one per manifest entry,
+# including the perturbed sibling. The dummy upstream outputs are written before the manifest and backdated so the
+# checkpoint output stays the newest of its inputs and never re-runs; the checkpoint's remaining config inputs
+# already live under inputs/quick_run/. Only the manifest basenames matter, so container-absolute run_dir paths work.
+def test_perturbed_manifest_expands_fan_out(tmp_path: Path) -> None:
+    config = yaml.safe_load((REPO_ROOT / "inputs/quick_run/config.yaml").read_text())
+    paths = resolve_pipeline_paths(config, output_dir=f"{tmp_path}/out")
+    for key in ("s1_output", "s2_output"):
+        artifact = Path(paths[key])
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("")
+        backdated = time.time() - 100
+        os.utime(artifact, (backdated, backdated))
+    manifest = Path(paths["stage4_manifest"])
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "runs": [
+                    {"run_dir": "/container/abs/runs/rho_001_r0p2500"},
+                    {"run_dir": "/container/abs/runs/rho_001_r0p2500_fd_n_D"},
+                ]
+            }
+        )
+    )
+    result = _dry_run(tmp_path, targets=[paths["s4_output"]], config_overrides=[])
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "stage4_run_one" in output, output
+    assert "rho_001_r0p2500_fd_n_D" in output, output
