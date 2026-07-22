@@ -139,3 +139,25 @@ def test_expand_passthrough_on_index_mismatch() -> None:
     arrays["rho_index"] = np.array([0, 1])  # not [1, 2] -> guard trips, no expansion
     out = scan._expand_axis_zero_if_needed(manifest, **arrays)
     assert out[0].shape == (2,)
+
+
+# --- _warn_unmatched_perturb_species ---
+
+# A name matching no runtime species must produce a stderr warning (not a silent skip) that names the channel, quotes
+# the bad name, lists the available runtime species, and states only the unperturbed base runs execute for it.
+def test_warn_unmatched_perturb_species_warns_on_bad_name(capsys: pytest.CaptureFixture[str]) -> None:
+    scan._warn_unmatched_perturb_species(["He", "D"], ["e", "D", "T"], flag_label="perturb_density_species")
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.strip()]
+    assert len(lines) == 1  # only the unmatched name warns; the valid "D" stays quiet
+    assert "perturb_density_species 'He' matches no runtime species" in lines[0]
+    assert "available: e, D, T" in lines[0]
+    assert "only unperturbed base runs will execute" in lines[0]
+
+
+# The match is case-insensitive and whitespace-trimmed, mirroring the runtime lookup, so a differently cased or padded
+# name that resolves to a real runtime species must not warn. Empty request lists must also stay silent.
+def test_warn_unmatched_perturb_species_quiet_on_valid_and_empty(capsys: pytest.CaptureFixture[str]) -> None:
+    scan._warn_unmatched_perturb_species([" d ", "T"], ["e", "D", "T"], flag_label="perturb_temperature_species")
+    scan._warn_unmatched_perturb_species([], ["e", "D", "T"], flag_label="perturb_density_species")
+    assert capsys.readouterr().err == ""
