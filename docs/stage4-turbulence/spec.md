@@ -152,8 +152,8 @@ Required `meta` group attributes (checked by the contract): `particle_flux_units
 
 | Dataset | Shape | Meaning |
 |---------|-------|---------|
-| `Gamma_perturb` | `(n_perturb, n_species, n_radii)` | Turbulent particle flux from the perturbed-gradient runs; same NEOPAX-unit conversion and units as `Gamma` |
-| `Q_perturb` | `(n_perturb, n_species, n_radii)` | Turbulent heat flux from the perturbed-gradient runs; same units as `Q` |
+| `Gamma_perturbed` | `(n_perturb, n_species, n_radii)` | Turbulent particle flux from the perturbed-gradient runs; same NEOPAX-unit conversion and units as `Gamma` |
+| `Q_perturbed` | `(n_perturb, n_species, n_radii)` | Turbulent heat flux from the perturbed-gradient runs; same units as `Q` |
 | `perturb_delta` | `(n_perturb, n_radii)` | Signed gradient increment applied for that (label, surface) |
 | `perturb_present` | `(n_perturb, n_radii)`, bool | True where a perturbed run exists; surfaces without one (including a re-inserted magnetic-axis column) hold zeros and False |
 | `perturb_kind` | `(n_perturb,)` | String label (`density_gradient` / `temperature_gradient`) keying the first axis of the arrays above |

@@ -730,17 +730,17 @@ def _build_manifest(
         local_geom_name: str,
     ) -> None:
         nonlocal run_index
-        pert_name = f"{base_name}_{suffix}_{perturb_species}".replace(".", "p")
-        pert_run_dir = (runs_root / pert_name).resolve()
-        pert_run_dir.mkdir(parents=True, exist_ok=True)
+        name_perturbed = f"{base_name}_{suffix}_{perturb_species}".replace(".", "p")
+        run_dir_perturbed = (runs_root / name_perturbed).resolve()
+        run_dir_perturbed.mkdir(parents=True, exist_ok=True)
         runs.append(
             {
                 **run_spec,
                 "index": run_index,
-                "run_dir": str(pert_run_dir),
-                "config_path": str((pert_run_dir / "input.toml").resolve()),
-                "output_prefix": str((pert_run_dir / "run").resolve()),
-                "geometry_file": str((pert_run_dir / local_geom_name).resolve()),
+                "run_dir": str(run_dir_perturbed),
+                "config_path": str((run_dir_perturbed / "input.toml").resolve()),
+                "output_prefix": str((run_dir_perturbed / "run").resolve()),
+                "geometry_file": str((run_dir_perturbed / local_geom_name).resolve()),
                 "runtime_species": runtime_species,
                 "response_role": "perturbed",
                 "perturb_kind": perturb_kind,
@@ -750,10 +750,10 @@ def _build_manifest(
         )
         run_index += 1
 
-    def _perturb_delta(base_grad: float, floor: float | None, *, signed: float) -> float:
+    def _perturb_delta(grad_base: float, floor: float | None, *, signed: float) -> float:
         return signed * max(
             float(floor) if floor is not None else 0.0,
-            0.0 if perturb_rel_step is None else float(perturb_rel_step) * abs(base_grad),
+            0.0 if perturb_rel_step is None else float(perturb_rel_step) * abs(grad_base),
         )
 
     for response_group, rho_idx in enumerate(rho_indices):
@@ -847,19 +847,19 @@ def _build_manifest(
 
         for species_name in perturb_density_species:
             species_key = species_name.strip().lower()
-            base_species = runtime_species_map.get(species_key)
-            if base_species is None:
+            species_base = runtime_species_map.get(species_key)
+            if species_base is None:
                 continue
-            delta = _perturb_delta(float(base_species["fprim"]), dkap_density, signed=-1.0)
-            perturbed_species = [dict(sp) for sp in runtime_species]
-            for sp in perturbed_species:
+            delta = _perturb_delta(float(species_base["fprim"]), dkap_density, signed=-1.0)
+            species_perturbed = [dict(sp) for sp in runtime_species]
+            for sp in species_perturbed:
                 if str(sp["name"]).strip().lower() == species_key:
                     sp["fprim"] = float(sp["fprim"]) + delta
                     sp["tprim"] = float(sp["tprim"]) - delta
                     break
             _append_perturbed_run(
                 run_spec,
-                perturbed_species,
+                species_perturbed,
                 suffix="fd_n",
                 perturb_kind="density_gradient",
                 perturb_species=species_name,
@@ -869,18 +869,18 @@ def _build_manifest(
 
         for species_name in perturb_temperature_species:
             species_key = species_name.strip().lower()
-            base_species = runtime_species_map.get(species_key)
-            if base_species is None:
+            species_base = runtime_species_map.get(species_key)
+            if species_base is None:
                 continue
-            delta = _perturb_delta(float(base_species["tprim"]), dkap_temperature, signed=1.0)
-            perturbed_species = [dict(sp) for sp in runtime_species]
-            for sp in perturbed_species:
+            delta = _perturb_delta(float(species_base["tprim"]), dkap_temperature, signed=1.0)
+            species_perturbed = [dict(sp) for sp in runtime_species]
+            for sp in species_perturbed:
                 if str(sp["name"]).strip().lower() == species_key:
                     sp["tprim"] = float(sp["tprim"]) + delta
                     break
             _append_perturbed_run(
                 run_spec,
-                perturbed_species,
+                species_perturbed,
                 suffix="fd_t",
                 perturb_kind="temperature_gradient",
                 perturb_species=species_name,
@@ -1714,8 +1714,8 @@ def _expand_axis_zero_if_needed(
 def cmd_collect(args: argparse.Namespace) -> int:
     manifest = _load_manifest(Path(args.manifest).resolve())
     runs = manifest["runs"]
-    base_indices = [i for i, run in enumerate(runs) if str(run.get("response_role", "base")) == "base"] or list(range(len(runs)))
-    perturbed_indices = [i for i, run in enumerate(runs) if str(run.get("response_role", "")) == "perturbed"]
+    indices_base = [i for i, run in enumerate(runs) if str(run.get("response_role", "base")) == "base"] or list(range(len(runs)))
+    indices_perturbed = [i for i, run in enumerate(runs) if str(run.get("response_role", "")) == "perturbed"]
     species_meta = list(manifest.get("species_meta", []))
     species_names = [str(sp["name"]) for sp in species_meta] if species_meta else list(manifest["runtime_species_names"])
     runtime_species_names = list(manifest["runtime_species_names"])
@@ -1807,18 +1807,18 @@ def cmd_collect(args: argparse.Namespace) -> int:
         q_neopax[:, i] *= a_minor
         gamma_neopax[:, i] *= a_minor
 
-    base_idx = np.asarray(base_indices, dtype=int)
-    rho_base = rho[base_idx]
-    r_physical_base = r_physical[base_idx]
-    rho_index_base = rho_index[base_idx]
-    torflux_base = torflux[base_idx]
-    er_base = er[base_idx]
-    heat_flux_base = heat_flux[base_idx]
-    particle_flux_base = particle_flux[base_idx]
-    heat_flux_species_base = heat_flux_species[base_idx, :]
-    particle_flux_species_base = particle_flux_species[base_idx, :]
-    gamma_neopax_base = gamma_neopax[:, base_idx]
-    q_neopax_base = q_neopax[:, base_idx]
+    idx_base = np.asarray(indices_base, dtype=int)
+    rho_base = rho[idx_base]
+    r_physical_base = r_physical[idx_base]
+    rho_index_base = rho_index[idx_base]
+    torflux_base = torflux[idx_base]
+    er_base = er[idx_base]
+    heat_flux_base = heat_flux[idx_base]
+    particle_flux_base = particle_flux[idx_base]
+    heat_flux_species_base = heat_flux_species[idx_base, :]
+    particle_flux_species_base = particle_flux_species[idx_base, :]
+    gamma_neopax_base = gamma_neopax[:, idx_base]
+    q_neopax_base = q_neopax[:, idx_base]
 
     (
         rho_base,
@@ -1883,8 +1883,8 @@ def cmd_collect(args: argparse.Namespace) -> int:
     gamma_sorted = gamma_neopax_base[:, order]
     q_sorted = q_neopax_base[:, order]
     perturb_labels: list[tuple[str, str]] = []
-    if perturbed_indices:
-        for i in perturbed_indices:
+    if indices_perturbed:
+        for i in indices_perturbed:
             label = (str(runs[i].get("perturb_kind", "")), str(runs[i].get("perturb_species", "")))
             if label not in perturb_labels:
                 perturb_labels.append(label)
@@ -1910,22 +1910,22 @@ def cmd_collect(args: argparse.Namespace) -> int:
         if perturb_labels:
             label_to_index = {label: i for i, label in enumerate(perturb_labels)}
             rho_index_to_axis = {int(rho_idx): axis for axis, rho_idx in enumerate(rho_index_sorted)}
-            gamma_perturb = np.zeros((len(perturb_labels), len(species_names), rho_sorted.size), dtype=float)
-            q_perturb = np.zeros((len(perturb_labels), len(species_names), rho_sorted.size), dtype=float)
+            gamma_perturbed = np.zeros((len(perturb_labels), len(species_names), rho_sorted.size), dtype=float)
+            q_perturbed = np.zeros((len(perturb_labels), len(species_names), rho_sorted.size), dtype=float)
             perturb_delta = np.zeros((len(perturb_labels), rho_sorted.size), dtype=float)
             perturb_present = np.zeros((len(perturb_labels), rho_sorted.size), dtype=bool)
-            for i in perturbed_indices:
+            for i in indices_perturbed:
                 label = (str(runs[i].get("perturb_kind", "")), str(runs[i].get("perturb_species", "")))
                 perturb_axis = label_to_index[label]
                 rho_axis = rho_index_to_axis.get(int(runs[i].get("rho_index", -1)))
                 if rho_axis is None:
                     continue
-                gamma_perturb[perturb_axis, :, rho_axis] = gamma_neopax[:, i]
-                q_perturb[perturb_axis, :, rho_axis] = q_neopax[:, i]
+                gamma_perturbed[perturb_axis, :, rho_axis] = gamma_neopax[:, i]
+                q_perturbed[perturb_axis, :, rho_axis] = q_neopax[:, i]
                 perturb_delta[perturb_axis, rho_axis] = float(runs[i].get("perturb_delta", 0.0))
                 perturb_present[perturb_axis, rho_axis] = True
-            f.create_dataset("Gamma_perturb", data=gamma_perturb)
-            f.create_dataset("Q_perturb", data=q_perturb)
+            f.create_dataset("Gamma_perturbed", data=gamma_perturbed)
+            f.create_dataset("Q_perturbed", data=q_perturbed)
             f.create_dataset("perturb_delta", data=perturb_delta)
             f.create_dataset("perturb_present", data=perturb_present)
             f.create_dataset(
