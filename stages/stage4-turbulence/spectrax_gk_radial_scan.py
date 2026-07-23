@@ -309,12 +309,10 @@ def _canonical_species_key(name: str) -> str:
 def _validate_perturb_species_names(perturb_species: list[str], *, flag_label: str) -> None:
     """Reject perturbation species names that cannot work inside run-directory names or run identity fields.
 
-    Snakemake schedules perturbed run-directory names only when the species name contains
-    nothing but letters, digits, and underscores (dots are rewritten to ``p``). This
-    function prevents names like ``He-3``, which would otherwise fail as a "No rule to
-    produce" scheduling error. It also rejects the reserved names ``none`` and ``base``
-    (case-insensitively), which mark unperturbed runs in the ``perturb_species`` and
-    ``response_label`` identity fields respectively.
+    Snakemake schedules perturbed run-directory names only when the species name contains nothing but letters,
+    digits, and underscores. This function prevents names like ``He-3``, which would otherwise fail as a "No rule
+    to produce" scheduling error. It also rejects the reserved names ``none`` and ``base`` (case-insensitively),
+    which mark unperturbed runs in the ``perturb_species`` and ``response_label`` identity fields respectively.
     """
     for name in perturb_species:
         if re.fullmatch(r"\w+", name) is None:
