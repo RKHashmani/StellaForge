@@ -100,7 +100,7 @@ stage4:
     # runs execute for it.
     # perturb_density_species: "D"       # density-gradient channel
     # perturb_temperature_species: "D"   # temperature-gradient channel
-    # Perturbation sizes each default to 0.5 under fd_gradients mode when left unset.
+    # Perturbation parameters default to 0.5 under fd_gradients mode when left unset.
     # dkap_density: 0.5
     # dkap_temperature: 0.5
     # perturb_rel_step: 0.5
