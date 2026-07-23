@@ -52,6 +52,15 @@ DEFAULT_COMMON_CONFIG = STAGES_DIR.parent / "inputs" / "quick_run" / "common_inp
 DEFAULT_SPECTRAX_TEMPLATE = STAGES_DIR.parent / "inputs" / "quick_run" / "HSX_vacuum_ns201_quickrun.toml"
 DEFAULT_OUTPUT_DIR = STAGES_DIR.parent / "outputs" / "quick_run" / "stage4_turbulence"
 DEFAULT_SPECTRAX_ROOT = Path(__file__).resolve().parents[3] / "SPECTRAX-GK"
+DEFAULT_FD_PERTURB_REL_STEP = 0.5
+DEFAULT_FD_DKAP_DENSITY = 0.5
+DEFAULT_FD_DKAP_TEMPERATURE = 0.5
+
+# Maps a run's gradient channel to the short fd_[nt] run-directory suffix stem the Snakemake surf wildcard matches.
+FD_CHANNEL_DIR_SUFFIX: dict[str, str] = {
+    "density_gradient": "fd_n",
+    "temperature_gradient": "fd_t",
+}
 
 NEOPAX_DENSITY_REFERENCE_M3 = 1.0e20
 NEOPAX_TEMPERATURE_REFERENCE_EV = 1.0e3
@@ -297,6 +306,54 @@ def _canonical_species_key(name: str) -> str:
     return str(name).strip().lower()
 
 
+def _validate_perturb_species_names(perturb_species: list[str], *, flag_label: str) -> None:
+    """Reject perturbation species names that cannot work inside run-directory names or run identity fields.
+
+    Snakemake schedules perturbed run-directory names only when the species name contains nothing but letters,
+    digits, and underscores. This function prevents names like ``He-3``, which would otherwise fail as a "No rule
+    to produce" scheduling error. It also rejects the reserved names ``none`` and ``base`` (case-insensitively),
+    which mark unperturbed runs in the ``perturb_species`` and ``response_label`` identity fields respectively.
+    """
+    for name in perturb_species:
+        if re.fullmatch(r"\w+", name) is None:
+            raise ValueError(
+                f"{flag_label} '{name}' cannot name a schedulable run directory: "
+                "species names may contain only letters, digits, and underscores"
+            )
+        if _canonical_species_key(name) in {"none", "base"}:
+            raise ValueError(
+                f"{flag_label} '{name}' is a reserved run-identity word: 'none' marks unperturbed runs in "
+                "perturb_species and 'base' marks them in response_label, so neither can name a species"
+            )
+
+
+def _warn_unmatched_perturb_species(
+    perturb_species: list[str], runtime_species_names: list[str], *, flag_label: str
+) -> None:
+    """Warn once per perturbation species name that matches no runtime species.
+
+    Parameters
+    ----------
+    perturb_species : list[str]
+        Names requested for a finite-difference gradient channel.
+    runtime_species_names : list[str]
+        Species that enter the runtime set for every flux surface.
+    flag_label : str
+        Channel identifier shown in the warning (e.g. ``perturb_density_species``).
+    """
+    available_keys = {_canonical_species_key(name) for name in runtime_species_names}
+    available_display = ", ".join(runtime_species_names)
+    for name in perturb_species:
+        if _canonical_species_key(name) in available_keys:
+            continue
+        print(
+            f"warning: {flag_label} '{name}' matches no runtime species "
+            f"(available: {available_display}); no perturbed runs generated for it, "
+            f"only unperturbed base runs will execute",
+            file=sys.stderr,
+        )
+
+
 def _infer_transport_snapshot(h5_path: Path, *, time_index: int) -> ProfileSnapshot:
     with h5py.File(h5_path, "r") as f:
         if {"rho", "density", "temperature", "Er"}.issubset(f.keys()):
@@ -338,14 +395,18 @@ def _build_standard_analytical_snapshot(
     n_radial: int,
 ) -> ProfileSnapshot:
     profile_cfg = cfg.get("profiles", {})
-    rho = np.linspace(0.0, 1.0, int(n_radial), dtype=np.float64)
+    rho_edge = float(cfg.get("geometry", {}).get("rho_edge", 1.0))
+    rho = np.linspace(0.0, rho_edge, int(n_radial), dtype=np.float64)
+    x = rho / max(float(rho[-1]) if rho.size else 1.0, 1.0e-30)
 
-    n0 = float(profile_cfg.get("n0", profile_cfg.get("ni0", profile_cfg.get("ne0", 4.21))))
-    n_edge = float(profile_cfg.get("n_edge", profile_cfg.get("nib", profile_cfg.get("neb", 0.6))))
-    t0 = float(profile_cfg.get("T0", profile_cfg.get("ti0", profile_cfg.get("te0", 17.8))))
-    t_edge = float(profile_cfg.get("T_edge", profile_cfg.get("tib", profile_cfg.get("teb", 0.7))))
-    density_shape_power = float(profile_cfg.get("density_shape_power", 2.0))
-    temperature_shape_power = float(profile_cfg.get("temperature_shape_power", 2.0))
+    n0 = _match_species_factors(profile_cfg.get("n0", profile_cfg.get("ni0", profile_cfg.get("ne0", 4.21))), n_species, default=4.21)
+    n_edge = _match_species_factors(profile_cfg.get("n_edge", profile_cfg.get("nib", profile_cfg.get("neb", 0.6))), n_species, default=0.6)
+    t0 = _match_species_factors(profile_cfg.get("T0", profile_cfg.get("ti0", profile_cfg.get("te0", 17.8))), n_species, default=17.8)
+    t_edge = _match_species_factors(profile_cfg.get("T_edge", profile_cfg.get("tib", profile_cfg.get("teb", 0.7))), n_species, default=0.7)
+    density_shape_power = _match_species_factors(profile_cfg.get("density_shape_power", 2.0), n_species, default=2.0)
+    density_shape_alpha = _match_species_factors(profile_cfg.get("density_shape_alpha", 1.0), n_species, default=1.0)
+    temperature_shape_power = _match_species_factors(profile_cfg.get("temperature_shape_power", 2.0), n_species, default=2.0)
+    temperature_shape_alpha = _match_species_factors(profile_cfg.get("temperature_shape_alpha", 1.0), n_species, default=1.0)
 
     c_density = profile_cfg.get("c_density")
     if c_density is None and n_species == 3:
@@ -358,15 +419,19 @@ def _build_standard_analytical_snapshot(
     density_global_scale = _match_species_factors(profile_cfg.get("n_scale", 1.0), n_species, default=1.0)
     temperature_global_scale = _match_species_factors(profile_cfg.get("T_scale", 1.0), n_species, default=1.0)
 
-    density_base = n_edge + (n0 - n_edge) * (1.0 - rho**density_shape_power)
-    temperature_base = t_edge + (t0 - t_edge) * (1.0 - rho**temperature_shape_power)
-    density = density_species_scale[:, None] * density_global_scale[:, None] * density_base[None, :]
-    temperature = temperature_species_scale[:, None] * temperature_global_scale[:, None] * temperature_base[None, :]
+    density = np.zeros((n_species, rho.size), dtype=np.float64)
+    temperature = np.zeros((n_species, rho.size), dtype=np.float64)
+    for i in range(n_species):
+        density_shape = (1.0 - x**density_shape_power[i]) ** density_shape_alpha[i]
+        temperature_shape = (1.0 - x**temperature_shape_power[i]) ** temperature_shape_alpha[i]
+        density_base = n_edge[i] + (n0[i] - n_edge[i]) * density_shape
+        temperature_base = t_edge[i] + (t0[i] - t_edge[i]) * temperature_shape
+        density[i, :] = density_species_scale[i] * density_global_scale[i] * density_base
+        temperature[i, :] = temperature_species_scale[i] * temperature_global_scale[i] * temperature_base
 
     er0_scale = float(profile_cfg.get("er0_scale", 100.0))
     er0_peak_rho = float(profile_cfg.get("er0_peak_rho", 0.8))
-    width = max(0.05, 0.35 * max(er0_peak_rho, 1.0 - er0_peak_rho, 0.15))
-    er = er0_scale * rho * np.exp(-0.5 * ((rho - er0_peak_rho) / width) ** 2)
+    er = er0_scale * x * (er0_peak_rho - x)
 
     return ProfileSnapshot(
         rho=np.asarray(rho, dtype=np.float64),
@@ -576,6 +641,22 @@ def _build_manifest(
     template_norm = _template_section(template_cfg, "normalization")
     template_terms = _template_section(template_cfg, "terms")
     template_run = _template_section(template_cfg, "run")
+    parse_species_list = lambda raw: [part.strip() for part in str(raw or "").split(",") if part.strip()]
+    response_mode = str(getattr(args, "response_mode", "none")).strip().lower()
+    perturb_density_species = parse_species_list(getattr(args, "perturb_density_species", ""))
+    perturb_temperature_species = parse_species_list(getattr(args, "perturb_temperature_species", ""))
+    perturb_rel_step = getattr(args, "perturb_rel_step", None)
+    dkap_density = getattr(args, "dkap_density", None)
+    dkap_temperature = getattr(args, "dkap_temperature", None)
+    if response_mode == "fd_gradients":
+        _validate_perturb_species_names(perturb_density_species, flag_label="perturb_density_species")
+        _validate_perturb_species_names(perturb_temperature_species, flag_label="perturb_temperature_species")
+        if perturb_rel_step is None:
+            perturb_rel_step = DEFAULT_FD_PERTURB_REL_STEP
+        if dkap_density is None:
+            dkap_density = DEFAULT_FD_DKAP_DENSITY
+        if dkap_temperature is None:
+            dkap_temperature = DEFAULT_FD_DKAP_TEMPERATURE
 
     gradient_coordinate = str(args.gradient_coordinate).strip().lower()
     gradient_scale = float(args.gradient_scale)
@@ -654,11 +735,55 @@ def _build_manifest(
     else:
         raise ValueError("electron_model must be either 'adiabatic' or 'kinetic'")
 
+    if response_mode == "fd_gradients":
+        _warn_unmatched_perturb_species(
+            perturb_density_species, runtime_species_names, flag_label="perturb_density_species"
+        )
+        _warn_unmatched_perturb_species(
+            perturb_temperature_species, runtime_species_names, flag_label="perturb_temperature_species"
+        )
+
     output_dir.mkdir(parents=True, exist_ok=True)
     runs_root = output_dir / "runs"
     runs_root.mkdir(parents=True, exist_ok=True)
+    run_index = 0
 
-    for ordinal, rho_idx in enumerate(rho_indices):
+    def _append_perturbed_run(
+        run_spec: dict[str, Any],
+        runtime_species: list[dict[str, Any]],
+        *,
+        response_label: str,
+        perturb_species: str,
+        perturb_delta: float,
+        local_geom_name: str,
+    ) -> None:
+        nonlocal run_index
+        name_perturbed = f"{base_name}_{FD_CHANNEL_DIR_SUFFIX[response_label]}_{perturb_species}".replace(".", "p")
+        run_dir_perturbed = (runs_root / name_perturbed).resolve()
+        run_dir_perturbed.mkdir(parents=True, exist_ok=True)
+        runs.append(
+            {
+                **run_spec,
+                "index": run_index,
+                "run_dir": str(run_dir_perturbed),
+                "config_path": str((run_dir_perturbed / "input.toml").resolve()),
+                "output_prefix": str((run_dir_perturbed / "run").resolve()),
+                "geometry_file": str((run_dir_perturbed / local_geom_name).resolve()),
+                "runtime_species": runtime_species,
+                "response_label": response_label,
+                "perturb_species": perturb_species,
+                "perturb_delta": float(perturb_delta),
+            }
+        )
+        run_index += 1
+
+    def _perturb_delta(grad_base: float, floor: float | None, *, signed: float) -> float:
+        return signed * max(
+            float(floor) if floor is not None else 0.0,
+            0.0 if perturb_rel_step is None else float(perturb_rel_step) * abs(grad_base),
+        )
+
+    for rho_idx in rho_indices:
         rho_val = float(rho[rho_idx])
         torflux = float(rho_val ** 2)
         ref_n = float(ref_density[rho_idx])
@@ -718,7 +843,7 @@ def _build_manifest(
         geometry_file = str((run_dir / local_geom_name).resolve())
         config_path = str((run_dir / "input.toml").resolve())
         run_spec = {
-            "index": ordinal,
+            "index": run_index,
             "rho_index": int(rho_idx),
             "rho": rho_val,
             "r_physical": float(a_minor * rho_val),
@@ -733,8 +858,58 @@ def _build_manifest(
             "tau_e": tau_e,
             "rho_star_physical": rho_star_physical,
             "a_minor": float(a_minor),
+            "response_label": "base",
+            "perturb_species": "none",
+            "perturb_delta": 0.0,
         }
         runs.append(run_spec)
+        run_index += 1
+
+        if response_mode != "fd_gradients":
+            continue
+
+        runtime_species_map = {str(sp["name"]).strip().lower(): sp for sp in runtime_species}
+
+        for species_name in perturb_density_species:
+            species_key = species_name.strip().lower()
+            species_base = runtime_species_map.get(species_key)
+            if species_base is None:
+                continue
+            delta = _perturb_delta(float(species_base["fprim"]), dkap_density, signed=-1.0)
+            species_perturbed = [dict(sp) for sp in runtime_species]
+            for sp in species_perturbed:
+                if str(sp["name"]).strip().lower() == species_key:
+                    sp["fprim"] = float(sp["fprim"]) + delta
+                    sp["tprim"] = float(sp["tprim"]) - delta
+                    break
+            _append_perturbed_run(
+                run_spec,
+                species_perturbed,
+                response_label="density_gradient",
+                perturb_species=species_name,
+                perturb_delta=delta,
+                local_geom_name=local_geom_name,
+            )
+
+        for species_name in perturb_temperature_species:
+            species_key = species_name.strip().lower()
+            species_base = runtime_species_map.get(species_key)
+            if species_base is None:
+                continue
+            delta = _perturb_delta(float(species_base["tprim"]), dkap_temperature, signed=1.0)
+            species_perturbed = [dict(sp) for sp in runtime_species]
+            for sp in species_perturbed:
+                if str(sp["name"]).strip().lower() == species_key:
+                    sp["tprim"] = float(sp["tprim"]) + delta
+                    break
+            _append_perturbed_run(
+                run_spec,
+                species_perturbed,
+                response_label="temperature_gradient",
+                perturb_species=species_name,
+                perturb_delta=delta,
+                local_geom_name=local_geom_name,
+            )
 
     manifest = {
         "schema_version": 1,
@@ -746,6 +921,12 @@ def _build_manifest(
         "snapshot_time": snapshot.time_value,
         "electron_model": str(electron_model_value).lower(),
         "spectrax_template": None if template_path is None else str(template_path),
+        "response_mode": response_mode,
+        "perturb_density_species": perturb_density_species,
+        "perturb_temperature_species": perturb_temperature_species,
+        "dkap_density": None if dkap_density is None else float(dkap_density),
+        "dkap_temperature": None if dkap_temperature is None else float(dkap_temperature),
+        "perturb_rel_step": None if perturb_rel_step is None else float(perturb_rel_step),
         "source_rho": [float(v) for v in rho],
         "source_er": [float(v) for v in er],
         "runtime_species_names": runtime_species_names,
@@ -872,6 +1053,9 @@ def _write_runs_csv(path: Path, manifest: dict[str, Any]) -> None:
             "config_path": run["config_path"],
             "output_prefix": run["output_prefix"],
             "geometry_file": run["geometry_file"],
+            "response_label": run.get("response_label", "base"),
+            "perturb_species": run.get("perturb_species", "none"),
+            "perturb_delta": run.get("perturb_delta", 0.0),
         }
         rows.append(row)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1551,6 +1735,8 @@ def _expand_axis_zero_if_needed(
 def cmd_collect(args: argparse.Namespace) -> int:
     manifest = _load_manifest(Path(args.manifest).resolve())
     runs = manifest["runs"]
+    indices_base = [i for i, run in enumerate(runs) if str(run.get("response_label", "base")) == "base"]
+    indices_perturbed = [i for i, run in enumerate(runs) if str(run.get("response_label", "base")) != "base"]
     species_meta = list(manifest.get("species_meta", []))
     species_names = [str(sp["name"]) for sp in species_meta] if species_meta else list(manifest["runtime_species_names"])
     runtime_species_names = list(manifest["runtime_species_names"])
@@ -1642,31 +1828,44 @@ def cmd_collect(args: argparse.Namespace) -> int:
         q_neopax[:, i] *= a_minor
         gamma_neopax[:, i] *= a_minor
 
+    idx_base = np.asarray(indices_base, dtype=int)
+    rho_base = rho[idx_base]
+    r_physical_base = r_physical[idx_base]
+    rho_index_base = rho_index[idx_base]
+    torflux_base = torflux[idx_base]
+    er_base = er[idx_base]
+    heat_flux_base = heat_flux[idx_base]
+    particle_flux_base = particle_flux[idx_base]
+    heat_flux_species_base = heat_flux_species[idx_base, :]
+    particle_flux_species_base = particle_flux_species[idx_base, :]
+    gamma_neopax_base = gamma_neopax[:, idx_base]
+    q_neopax_base = q_neopax[:, idx_base]
+
     (
-        rho,
-        r_physical,
-        rho_index,
-        torflux,
-        er,
-        heat_flux,
-        particle_flux,
-        heat_flux_species,
-        particle_flux_species,
-        gamma_neopax,
-        q_neopax,
+        rho_base,
+        r_physical_base,
+        rho_index_base,
+        torflux_base,
+        er_base,
+        heat_flux_base,
+        particle_flux_base,
+        heat_flux_species_base,
+        particle_flux_species_base,
+        gamma_neopax_base,
+        q_neopax_base,
     ) = _expand_axis_zero_if_needed(
         manifest,
-        rho,
-        r_physical,
-        rho_index,
-        torflux,
-        er,
-        heat_flux,
-        particle_flux,
-        heat_flux_species,
-        particle_flux_species,
-        gamma_neopax,
-        q_neopax,
+        rho_base,
+        r_physical_base,
+        rho_index_base,
+        torflux_base,
+        er_base,
+        heat_flux_base,
+        particle_flux_base,
+        heat_flux_species_base,
+        particle_flux_species_base,
+        gamma_neopax_base,
+        q_neopax_base,
     )
 
     with h5py.File(out_h5, "w") as f:
@@ -1680,8 +1879,14 @@ def cmd_collect(args: argparse.Namespace) -> int:
         f.create_dataset("average_window", data=average_window_used)
         f.create_dataset("average_t_start", data=average_t_start)
         f.create_dataset("average_t_end", data=average_t_end)
-        grp = f.create_group("species")
         dt = h5py.string_dtype(encoding="utf-8")
+        # Per-run identity columns mirroring _write_runs_csv: rows here are one-per-executed-run, so in fd_gradients
+        # response mode base and perturbed runs land at duplicate rho values and the (response_label, perturb_species)
+        # pair is what distinguishes them.
+        f.create_dataset("response_label", data=np.asarray([str(run.get("response_label", "base")) for run in runs], dtype=object), dtype=dt)
+        f.create_dataset("perturb_species", data=np.asarray([str(run.get("perturb_species", "none")) for run in runs], dtype=object), dtype=dt)
+        f.create_dataset("perturb_delta", data=np.asarray([float(run.get("perturb_delta", 0.0)) for run in runs], dtype=float))
+        grp = f.create_group("species")
         grp.create_dataset("names", data=np.asarray(species_names, dtype=object), dtype=dt)
         grp.create_dataset("heat_flux", data=heat_flux_species)
         grp.create_dataset("particle_flux", data=particle_flux_species)
@@ -1698,11 +1903,17 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
     neopax_flux_out = Path(args.neopax_flux_out).resolve()
     neopax_flux_out.parent.mkdir(parents=True, exist_ok=True)
-    order = np.argsort(rho)
-    rho_sorted = rho[order]
-    r_sorted = r_physical[order]
-    gamma_sorted = gamma_neopax[:, order]
-    q_sorted = q_neopax[:, order]
+    order = np.argsort(rho_base)
+    rho_sorted = rho_base[order]
+    r_sorted = r_physical_base[order]
+    rho_index_sorted = rho_index_base[order]
+    gamma_sorted = gamma_neopax_base[:, order]
+    q_sorted = q_neopax_base[:, order]
+    perturb_keys: list[tuple[str, str]] = []
+    for i in indices_perturbed:
+        key = (str(runs[i]["response_label"]), str(runs[i]["perturb_species"]))
+        if key not in perturb_keys:
+            perturb_keys.append(key)
     with h5py.File(neopax_flux_out, "w") as f:
         f.create_dataset("rho", data=rho_sorted)
         f.create_dataset("r", data=r_sorted)
@@ -1722,6 +1933,36 @@ def cmd_collect(args: argparse.Namespace) -> int:
         meta.attrs["conversion"] = "Gamma_r = a * Gamma_rho = a * Gamma_gB * n_ref[m^-3] * vth_ref[m/s] * rho_star^2; Q_r = a * Q_rho = a * Q_gB * T_ref[eV] * n_ref[m^-3] * vth_ref[m/s] * rho_star^2"
         meta.attrs["reference_species_name"] = str(manifest.get("normalization", {}).get("reference_species_name", ""))
         meta.attrs["manifest"] = str(Path(args.manifest).resolve())
+        if perturb_keys:
+            key_to_index = {key: i for i, key in enumerate(perturb_keys)}
+            rho_index_to_axis = {int(rho_idx): axis for axis, rho_idx in enumerate(rho_index_sorted)}
+            gamma_perturbed = np.zeros((len(perturb_keys), len(species_names), rho_sorted.size), dtype=float)
+            q_perturbed = np.zeros((len(perturb_keys), len(species_names), rho_sorted.size), dtype=float)
+            perturb_delta = np.zeros((len(perturb_keys), rho_sorted.size), dtype=float)
+            perturb_present = np.zeros((len(perturb_keys), rho_sorted.size), dtype=bool)
+            for i in indices_perturbed:
+                perturb_axis = key_to_index[(str(runs[i]["response_label"]), str(runs[i]["perturb_species"]))]
+                rho_axis = rho_index_to_axis.get(int(runs[i].get("rho_index", -1)))
+                if rho_axis is None:
+                    continue
+                gamma_perturbed[perturb_axis, :, rho_axis] = gamma_neopax[:, i]
+                q_perturbed[perturb_axis, :, rho_axis] = q_neopax[:, i]
+                perturb_delta[perturb_axis, rho_axis] = float(runs[i].get("perturb_delta", 0.0))
+                perturb_present[perturb_axis, rho_axis] = True
+            f.create_dataset("Gamma_perturbed", data=gamma_perturbed)
+            f.create_dataset("Q_perturbed", data=q_perturbed)
+            f.create_dataset("perturb_delta", data=perturb_delta)
+            f.create_dataset("perturb_present", data=perturb_present)
+            f.create_dataset(
+                "response_label",
+                data=np.asarray([key[0] for key in perturb_keys], dtype=object),
+                dtype=dt,
+            )
+            f.create_dataset(
+                "perturb_species",
+                data=np.asarray([key[1] for key in perturb_keys], dtype=object),
+                dtype=dt,
+            )
 
     if bool(args.plot):
         _write_summary_plots(
@@ -1864,6 +2105,12 @@ def cmd_all(args: argparse.Namespace) -> int:
         normalization_contract=args.normalization_contract,
         diagnostic_norm=args.diagnostic_norm,
         rho_star_physical=args.rho_star_physical,
+        response_mode=args.response_mode,
+        perturb_density_species=args.perturb_density_species,
+        perturb_temperature_species=args.perturb_temperature_species,
+        dkap_density=args.dkap_density,
+        dkap_temperature=args.dkap_temperature,
+        perturb_rel_step=args.perturb_rel_step,
     )
     rc = cmd_prepare(prepare_args)
     if rc != 0:
@@ -1987,6 +2234,40 @@ def _add_prepare_shaping_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--normalization-contract", default=None)
     parser.add_argument("--diagnostic-norm", default=None)
     parser.add_argument("--rho-star-physical", type=float, default=None, help="Optional manual rho_star override; otherwise derive it per radius from VMEC geometry and the reference-ion profile")
+    parser.add_argument(
+        "--response-mode",
+        choices=("none", "fd_gradients"),
+        default="none",
+        help="Optional turbulence-response mode. 'fd_gradients' reserves baseline plus perturbed gradient runs for a future finite-difference response path.",
+    )
+    parser.add_argument(
+        "--perturb-density-species",
+        default=None,
+        help="Comma-separated species names to perturb through the density-gradient channel when response mode is enabled.",
+    )
+    parser.add_argument(
+        "--perturb-temperature-species",
+        default=None,
+        help="Comma-separated species names to perturb through the temperature-gradient channel when response mode is enabled.",
+    )
+    parser.add_argument(
+        "--dkap-density",
+        type=float,
+        default=None,
+        help="Optional absolute floor for density-gradient perturbations in fd_gradients mode.",
+    )
+    parser.add_argument(
+        "--dkap-temperature",
+        type=float,
+        default=None,
+        help="Optional absolute floor for temperature-gradient perturbations in fd_gradients mode.",
+    )
+    parser.add_argument(
+        "--perturb-rel-step",
+        type=float,
+        default=None,
+        help="Optional relative perturbation factor used later with fd_gradients mode.",
+    )
 
 
 def _add_collect_tuning_args(parser: argparse.ArgumentParser) -> None:

@@ -34,19 +34,25 @@ _scan = load_stage_module(_STAGE4_SCRIPT)
 # scan-level flags. The t_max key is deliberately spelled --t-final, the prepare
 # parser's alias whose argparse dest is t_max.
 _PREPARE_OPTIONALS: list[tuple[str, str, object]] = [
-    ("profiles_source",    "--profiles-source",    "analytical"),
-    ("neopax_result",      "--neopax-result",      "outputs/quick_run/stage5_transport/transport_solution.h5"),
-    ("nx",                 "--nx",                 12),
-    ("ny",                 "--ny",                 12),
-    ("ntheta",             "--ntheta",             30),
-    ("t_max",              "--t-final",            10.0),
-    ("sample_stride",      "--sample-stride",      50),
-    ("diagnostics_stride", "--diagnostics-stride", 1),
-    ("analytical_n_radii", "--analytical-n-radii", 5),
-    ("rho_indices",        "--rho-indices",        "1,5,10"),
-    ("rho_min",            "--rho-min",            0.1),
-    ("rho_max",            "--rho-max",            0.9),
-    ("num_radii",          "--num-radii",          4),
+    ("profiles_source",               "--profiles-source",               "analytical"),
+    ("neopax_result",                 "--neopax-result",                 "stage5_transport/transport_solution.h5"),
+    ("nx",                            "--nx",                            12),
+    ("ny",                            "--ny",                            12),
+    ("ntheta",                        "--ntheta",                        30),
+    ("t_max",                         "--t-final",                       10.0),
+    ("sample_stride",                 "--sample-stride",                 50),
+    ("diagnostics_stride",            "--diagnostics-stride",            1),
+    ("analytical_n_radii",            "--analytical-n-radii",            5),
+    ("rho_indices",                   "--rho-indices",                   "1,5,10"),
+    ("rho_min",                       "--rho-min",                       0.1),
+    ("rho_max",                       "--rho-max",                       0.9),
+    ("num_radii",                     "--num-radii",                     4),
+    ("response_mode",                 "--response-mode",                 "fd_gradients"),
+    ("perturb_density_species",       "--perturb-density-species",       "D"),
+    ("perturb_temperature_species",   "--perturb-temperature-species",   "D,T"),
+    ("dkap_density",                  "--dkap-density",                  0.5),
+    ("dkap_temperature",              "--dkap-temperature",              0.5),
+    ("perturb_rel_step",              "--perturb-rel-step",              0.5),
 ]
 
 # max_parallel and collect_even_if_failures are retired keys that older configs may

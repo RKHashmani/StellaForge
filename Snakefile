@@ -104,7 +104,8 @@ rule stage2_boozer:
 
 # Per-surface run-directory basenames e.g. rho_012_r0p4898 follow the pattern:
 # zero-padded radial-grid index then the normalized flux-surface radius (e.g. rho=0.4898).
-SURF_PATTERN = r"rho_\d+_r[0-9p]+"
+# Stage 4 fd_gradients mode adds perturbed siblings, e.g. rho_012_r0p4898_fd_n_D.
+SURF_PATTERN = r"rho_\d+_r[0-9p]+(?:_fd_[nt]_\w+)?"
 
 checkpoint stage3_prepare:
     input:

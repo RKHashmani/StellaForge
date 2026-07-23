@@ -9,6 +9,12 @@ the module and calling these helpers needs no solver.
 
 from __future__ import annotations
 
+import argparse
+import csv
+import json
+from pathlib import Path
+
+import h5py
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
@@ -139,3 +145,197 @@ def test_expand_passthrough_on_index_mismatch() -> None:
     arrays["rho_index"] = np.array([0, 1])  # not [1, 2] -> guard trips, no expansion
     out = scan._expand_axis_zero_if_needed(manifest, **arrays)
     assert out[0].shape == (2,)
+
+
+# --- _warn_unmatched_perturb_species ---
+
+# A name matching no runtime species must produce a stderr warning (not a silent skip) that names the channel, quotes
+# the bad name, lists the available runtime species, and states only the unperturbed base runs execute for it.
+def test_warn_unmatched_perturb_species_warns_on_bad_name(capsys: pytest.CaptureFixture[str]) -> None:
+    scan._warn_unmatched_perturb_species(["He", "D"], ["e", "D", "T"], flag_label="perturb_density_species")
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.strip()]
+    assert len(lines) == 1  # only the unmatched name warns; the valid "D" stays quiet
+    assert "perturb_density_species 'He' matches no runtime species" in lines[0]
+    assert "available: e, D, T" in lines[0]
+    assert "only unperturbed base runs will execute" in lines[0]
+
+
+# The match is case-insensitive and whitespace-trimmed, mirroring the runtime lookup, so a differently cased or padded
+# name that resolves to a real runtime species must not warn. Empty request lists must also stay silent.
+def test_warn_unmatched_perturb_species_quiet_on_valid_and_empty(capsys: pytest.CaptureFixture[str]) -> None:
+    scan._warn_unmatched_perturb_species([" d ", "T"], ["e", "D", "T"], flag_label="perturb_temperature_species")
+    scan._warn_unmatched_perturb_species([], ["e", "D", "T"], flag_label="perturb_density_species")
+    assert capsys.readouterr().err == ""
+
+
+# --- cmd_collect: flux_summary.h5 run-identity datasets ---
+
+def _collect_run_spec(tmp_path: Path, index: int, rho_index: int, rho: float, **response_fields: object) -> dict:
+    # Pointing output_prefix at a directory with no diagnostics CSV drives collect down its zero-fill branch, which
+    # skips the per-species flux conversion entirely; the run spec can then omit runtime_species and the reference
+    # normalization data, keeping the fixture at the minimum the identity datasets need.
+    return {
+        "index": index,
+        "rho_index": rho_index,
+        "rho": rho,
+        "torflux": rho**2,
+        "Er": 0.0,
+        "output_prefix": str(tmp_path / f"runs/run_{index:03d}/run"),
+        **response_fields,
+    }
+
+
+def _run_collect(tmp_path: Path, runs: list[dict]) -> Path:
+    manifest = {
+        "runs": runs,
+        "runtime_species_names": ["D"],
+        "electron_model": "adiabatic",
+        "neopax_result": "",
+        "common_config": "",
+    }
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    args = argparse.Namespace(
+        manifest=str(manifest_path),
+        out=str(tmp_path / "flux_summary.h5"),
+        neopax_flux_out=str(tmp_path / "neopax_fluxes.h5"),
+        average_window=5.0,
+        t_final=None,
+        plot=False,
+        plot_run_heat_traces=False,
+    )
+    assert scan.cmd_collect(args) == 0
+    return Path(args.out)
+
+
+# flux_summary.h5 holds one row per executed run, so in fd_gradients mode base and perturbed rows sit at duplicate rho
+# values; the file must carry the run identity as datasets so those rows are distinguishable without joining against
+# runs.csv by row order.
+def test_collect_flux_summary_carries_run_identity_datasets(tmp_path: Path) -> None:
+    runs = [
+        _collect_run_spec(tmp_path, 0, 1, 0.25, response_label="base", perturb_species="none", perturb_delta=0.0),
+        _collect_run_spec(tmp_path, 1, 1, 0.25, response_label="density_gradient", perturb_species="D", perturb_delta=-0.5),
+    ]
+    out = _run_collect(tmp_path, runs)
+    with h5py.File(out, "r") as f:
+        assert f["response_label"].asstr()[...].tolist() == ["base", "density_gradient"]
+        assert f["perturb_species"].asstr()[...].tolist() == ["none", "D"]
+        assert_allclose(f["perturb_delta"][...], [0.0, -0.5])
+        # rows stay per-run in manifest order: both rho entries present, no synthetic axis point inserted
+        assert_allclose(f["rho"][...], [0.25, 0.25])
+
+
+# Manifests written before response_mode existed have run specs without any response/perturb fields; collect must still
+# write the identity datasets, defaulting every row to a base run so the schema is uniform across old and new outputs.
+def test_collect_flux_summary_identity_defaults_for_legacy_manifest(tmp_path: Path) -> None:
+    out = _run_collect(tmp_path, [_collect_run_spec(tmp_path, 0, 1, 0.5)])
+    with h5py.File(out, "r") as f:
+        assert f["response_label"].asstr()[...].tolist() == ["base"]
+        assert f["perturb_species"].asstr()[...].tolist() == ["none"]
+        assert_allclose(f["perturb_delta"][...], [0.0])
+
+
+# --- _validate_perturb_species_names ---
+
+# Species names are pasted into perturbed run-directory names, which Snakemake schedules only when the name contains
+# nothing but letters, digits, and underscores; the validator must therefore reject a name like "He-3" early, with an
+# error that names both the channel and the offending species.
+def test_validate_perturb_species_names_rejects_invalid_names() -> None:
+    with pytest.raises(ValueError) as excinfo:
+        scan._validate_perturb_species_names(["He-3"], flag_label="perturb_density_species")
+    message = str(excinfo.value)
+    assert "perturb_density_species" in message
+    assert "'He-3'" in message
+    with pytest.raises(ValueError):
+        scan._validate_perturb_species_names(["D.T"], flag_label="perturb_temperature_species")
+
+
+# Names made of letters, digits, and underscores (including single-letter ones) and an empty request list are all
+# schedulable, so the validator must accept them without raising.
+def test_validate_perturb_species_names_accepts_valid_names() -> None:
+    scan._validate_perturb_species_names(["D", "He3", "t_D", "e"], flag_label="perturb_density_species")
+    scan._validate_perturb_species_names([], flag_label="perturb_temperature_species")
+
+
+# "none" marks unperturbed runs in the perturb_species identity field and "base" marks them in response_label, so a
+# species carrying either name would make run records ambiguous; the validator must reject both, case-insensitively
+# (matching the runtime species lookup), with an error naming the channel and the offending species.
+def test_validate_perturb_species_names_rejects_reserved_names() -> None:
+    for name in ("none", "Base"):
+        with pytest.raises(ValueError) as excinfo:
+            scan._validate_perturb_species_names([name], flag_label="perturb_density_species")
+        message = str(excinfo.value)
+        assert "perturb_density_species" in message
+        assert f"'{name}'" in message
+
+
+# --- cmd_collect: neopax_fluxes.h5 perturbation axis ---
+
+# In fd_gradients mode collect keys the perturbation axis of neopax_fluxes.h5 on distinct (response_label,
+# perturb_species) pairs in first-seen manifest order (deliberately not alphabetical here), joining each perturbed run
+# to its base surface through the shared rho_index. Two species perturbed on the same channel must land on separate
+# axis rows, surfaces missing a given pair hold zeros and False, and the axis never contains "base" / "none".
+def test_collect_neopax_perturbed_axis_keyed_by_channel_and_species(tmp_path: Path) -> None:
+    runs = [
+        _collect_run_spec(tmp_path, 0, 1, 0.25, response_label="base", perturb_species="none", perturb_delta=0.0),
+        _collect_run_spec(tmp_path, 1, 2, 0.5, response_label="base", perturb_species="none", perturb_delta=0.0),
+        _collect_run_spec(tmp_path, 2, 1, 0.25, response_label="temperature_gradient", perturb_species="D", perturb_delta=0.5),
+        _collect_run_spec(tmp_path, 3, 1, 0.25, response_label="density_gradient", perturb_species="D", perturb_delta=-0.5),
+        _collect_run_spec(tmp_path, 4, 2, 0.5, response_label="density_gradient", perturb_species="D", perturb_delta=-0.4),
+        _collect_run_spec(tmp_path, 5, 1, 0.25, response_label="density_gradient", perturb_species="T", perturb_delta=-0.3),
+    ]
+    _run_collect(tmp_path, runs)
+    with h5py.File(tmp_path / "neopax_fluxes.h5", "r") as f:
+        assert f["response_label"].asstr()[...].tolist() == ["temperature_gradient", "density_gradient", "density_gradient"]
+        assert f["perturb_species"].asstr()[...].tolist() == ["D", "D", "T"]
+        assert f["perturb_present"][...].tolist() == [[True, False], [True, True], [True, False]]
+        assert_allclose(f["perturb_delta"][...], [[0.5, 0.0], [-0.5, -0.4], [-0.3, 0.0]])
+        assert f["Gamma_perturbed"].shape == (3, 1, 2)
+
+
+# A base-only (legacy) manifest has no perturbed runs, so collect must write the required base datasets but none of the
+# optional perturbation datasets, keeping the axis absent entirely rather than empty.
+def test_collect_neopax_omits_perturbed_datasets_for_base_only_manifest(tmp_path: Path) -> None:
+    _run_collect(tmp_path, [_collect_run_spec(tmp_path, 0, 1, 0.5)])
+    with h5py.File(tmp_path / "neopax_fluxes.h5", "r") as f:
+        for required in ("rho", "Gamma", "Q", "Upar"):
+            assert required in f
+        for absent in ("Gamma_perturbed", "Q_perturbed", "perturb_delta", "perturb_present", "response_label", "perturb_species"):
+            assert absent not in f
+
+
+# --- _write_runs_csv identity columns ---
+
+# runs.csv is the flat per-run planning summary; its full header order (basic run fields then the trailing identity
+# fields) is a stable contract.
+def test_runs_csv_identity_columns(tmp_path: Path) -> None:
+    def _run(index: int, label: str, species: str, delta: float) -> dict:
+        stem = f"/x/run_{index:03d}"
+        return {
+            "index": index,
+            "rho_index": 1,
+            "rho": 0.25,
+            "torflux": 0.0625,
+            "Er": 0.0,
+            "run_dir": stem,
+            "config_path": f"{stem}/input.toml",
+            "output_prefix": f"{stem}/run",
+            "geometry_file": f"{stem}/geom.eik.nc",
+            "response_label": label,
+            "perturb_species": species,
+            "perturb_delta": delta,
+        }
+
+    csv_path = tmp_path / "runs.csv"
+    scan._write_runs_csv(csv_path, {"runs": [_run(0, "base", "none", 0.0), _run(1, "density_gradient", "D", -0.5)]})
+    with csv_path.open(newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        assert reader.fieldnames == [
+            "index", "rho_index", "rho", "torflux", "Er", "run_dir", "config_path",
+            "output_prefix", "geometry_file", "response_label", "perturb_species", "perturb_delta",
+        ]
+        rows = list(reader)
+    assert [row["response_label"] for row in rows] == ["base", "density_gradient"]
+    assert [row["perturb_species"] for row in rows] == ["none", "D"]
+    assert [row["perturb_delta"] for row in rows] == ["0.0", "-0.5"]
