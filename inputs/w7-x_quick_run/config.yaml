@@ -1,0 +1,114 @@
+# driftless-star pipeline run configuration.
+# CLI overrides `snakemake --config key=value` beat any value here.
+
+# Independent of the input_dir/output_dir folder name; describes the physics case.
+run_name: w7x_t3d_reconstruction
+
+# Container runtime device. One of: cpu, gpu.
+device: cpu
+
+
+input_dir: inputs/w7-x_quick_run
+output_dir: outputs/w7-x_quick_run
+
+# Input basenames (under input_dir); output basenames (under output_dir/stageN_<name>/).
+filenames:
+  s1_input: vmec_input.{run_name}      # Stage 1 VMEC INDATA namelist
+  s1_output: wout_{run_name}.nc
+  s2_output: boozmn_{run_name}.nc
+  s3_config: sfincs_input.{run_name}   # Stage 3 SFINCS namelist
+  s3_output: sfincs_jax_flux_profiles.h5
+  s4_config: "{run_name}.toml"         # Stage 4 SPECTRAX-GK template
+  s4_output: neopax_fluxes.h5
+  s5_config: common_input.toml         # shared by Stages 3, 4, 5
+  s5_output: transport_solution.h5
+  s5_signal: converge_status.json
+
+# Convergence criteria
+# Converged when the relative RMS change of the total pressure profile between
+# the initial and final transport time slices is below this tolerance:
+#   ||P_final - P_initial|| / ||P_initial|| < pressure_rel_tol
+convergence:
+  pressure_rel_tol: 1.0e-2
+
+# Stage 3 SFINCS (sfincs_jax) radial scan.
+# Surface-level concurrency is controlled by `snakemake --cores`.
+stage3:
+  sfincs_jax:
+    # --- Profile source ---
+    profiles_source: analytical
+    neopax_result: null
+
+    # --- Surface selection ---
+    # Number of rho grid points for profiles_source: analytical (the axis point is
+    # dropped, so for e.g. 51 points scan 50 surfaces).
+    analytical_n_radii: 51
+    # num_radii: 4            # subsample this many radii inside the rho window
+    # rho_min: 0.1            # lower edge of the rho window
+    # rho_max: 0.9            # upper edge of the rho window
+    # rho_indices: "1,5,10"   # comma-separated explicit indices instead of the full grid
+
+    # --- Resolution ---
+    ntheta: 5
+    nzeta: 11
+    nxi: 12
+    nx: 4
+    solver_tolerance: 1.0e-6
+
+    # Used only when `device: gpu`.
+    gpu_ids: "0"
+
+    # --- Toggles ---
+    plot: true
+    verbose_workers: true
+
+# Stage 4 SPECTRAX-GK radial scan.
+# Surface-level concurrency is controlled by `snakemake --cores`.
+stage4:
+  spectrax_gk:
+    # --- Profile source ---
+    profiles_source: analytical
+    neopax_result: null
+
+    # --- Surface selection ---
+    # Number of rho grid points for profiles_source: analytical; null falls back to
+    # [geometry].n_radial in common_input.toml (5 points, scanning 4 nonzero surfaces).
+    analytical_n_radii: null
+    # num_radii: 4            # subsample this many radii inside the rho window
+    # rho_min: 0.0            # lower edge of the rho window
+    # rho_max: 1.0            # upper edge of the rho window
+    # rho_indices: "1,2,3"    # comma-separated explicit indices instead of the window
+
+    # --- Resolution / time window ---
+    nx: 12
+    ny: 12
+    ntheta: 30
+    t_max: 10.0
+    average_window: 1.0
+    sample_stride: 50
+    diagnostics_stride: 1
+
+    # --- Turbulence response (perturbed fluxes) ---
+    # response_mode `fd_gradients` adds one perturbed sibling run per listed (channel,
+    # species) pair per flux surface, multiplying the Stage 4 job count. `none` (or
+    # removing the key) runs baseline fluxes only.
+    response_mode: fd_gradients
+    # Species to perturb per channel: comma-separated quoted names drawn from the
+    # runtime species (e, D, T). A name matching no runtime species, including
+    # electrons under an adiabatic electron model, prints a warning at prepare time
+    # and generates no perturbed runs for that name, so only the unperturbed base
+    # runs execute for it.
+    # perturb_density_species: "D"       # density-gradient channel
+    perturb_temperature_species: "ion"   # temperature-gradient channel
+    # Perturbation parameters default to 0.5 under fd_gradients mode when left unset.
+    dkap_density: 0.5
+    dkap_temperature: 0.5
+    perturb_rel_step: 0.5
+
+    # Used only when `device: gpu`.
+    gpu_ids: "0"
+
+    # --- Toggles ---
+    plot: true
+    plot_run_heat_traces: true
+    verbose_workers: true
