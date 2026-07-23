@@ -56,6 +56,12 @@ DEFAULT_FD_PERTURB_REL_STEP = 0.5
 DEFAULT_FD_DKAP_DENSITY = 0.5
 DEFAULT_FD_DKAP_TEMPERATURE = 0.5
 
+# Maps a run's gradient channel to the short fd_[nt] run-directory suffix stem the Snakemake surf wildcard matches.
+FD_CHANNEL_DIR_SUFFIX: dict[str, str] = {
+    "density_gradient": "fd_n",
+    "temperature_gradient": "fd_t",
+}
+
 NEOPAX_DENSITY_REFERENCE_M3 = 1.0e20
 NEOPAX_TEMPERATURE_REFERENCE_EV = 1.0e3
 
@@ -301,18 +307,25 @@ def _canonical_species_key(name: str) -> str:
 
 
 def _validate_perturb_species_names(perturb_species: list[str], *, flag_label: str) -> None:
-    """Reject perturbation species names that cannot work inside run-directory names.
+    """Reject perturbation species names that cannot work inside run-directory names or run identity fields.
 
     Snakemake schedules perturbed run-directory names only when the species name contains
     nothing but letters, digits, and underscores (dots are rewritten to ``p``). This
     function prevents names like ``He-3``, which would otherwise fail as a "No rule to
-    produce" scheduling error.
+    produce" scheduling error. It also rejects the reserved names ``none`` and ``base``
+    (case-insensitively), which mark unperturbed runs in the ``perturb_species`` and
+    ``response_label`` identity fields respectively.
     """
     for name in perturb_species:
         if re.fullmatch(r"\w+", name) is None:
             raise ValueError(
                 f"{flag_label} '{name}' cannot name a schedulable run directory: "
                 "species names may contain only letters, digits, and underscores"
+            )
+        if _canonical_species_key(name) in {"none", "base"}:
+            raise ValueError(
+                f"{flag_label} '{name}' is a reserved run-identity word: 'none' marks unperturbed runs in "
+                "perturb_species and 'base' marks them in response_label, so neither can name a species"
             )
 
 
@@ -742,11 +755,12 @@ def _build_manifest(
         runtime_species: list[dict[str, Any]],
         *,
         response_label: str,
+        perturb_species: str,
         perturb_delta: float,
         local_geom_name: str,
     ) -> None:
         nonlocal run_index
-        name_perturbed = f"{base_name}_{response_label}".replace(".", "p")
+        name_perturbed = f"{base_name}_{FD_CHANNEL_DIR_SUFFIX[response_label]}_{perturb_species}".replace(".", "p")
         run_dir_perturbed = (runs_root / name_perturbed).resolve()
         run_dir_perturbed.mkdir(parents=True, exist_ok=True)
         runs.append(
@@ -759,6 +773,7 @@ def _build_manifest(
                 "geometry_file": str((run_dir_perturbed / local_geom_name).resolve()),
                 "runtime_species": runtime_species,
                 "response_label": response_label,
+                "perturb_species": perturb_species,
                 "perturb_delta": float(perturb_delta),
             }
         )
@@ -846,6 +861,7 @@ def _build_manifest(
             "rho_star_physical": rho_star_physical,
             "a_minor": float(a_minor),
             "response_label": "base",
+            "perturb_species": "none",
             "perturb_delta": 0.0,
         }
         runs.append(run_spec)
@@ -871,7 +887,8 @@ def _build_manifest(
             _append_perturbed_run(
                 run_spec,
                 species_perturbed,
-                response_label=f"fd_n_{species_name}",
+                response_label="density_gradient",
+                perturb_species=species_name,
                 perturb_delta=delta,
                 local_geom_name=local_geom_name,
             )
@@ -890,7 +907,8 @@ def _build_manifest(
             _append_perturbed_run(
                 run_spec,
                 species_perturbed,
-                response_label=f"fd_t_{species_name}",
+                response_label="temperature_gradient",
+                perturb_species=species_name,
                 perturb_delta=delta,
                 local_geom_name=local_geom_name,
             )
@@ -1038,6 +1056,7 @@ def _write_runs_csv(path: Path, manifest: dict[str, Any]) -> None:
             "output_prefix": run["output_prefix"],
             "geometry_file": run["geometry_file"],
             "response_label": run.get("response_label", ""),
+            "perturb_species": run.get("perturb_species", ""),
             "perturb_delta": run.get("perturb_delta", ""),
         }
         rows.append(row)
@@ -1864,9 +1883,10 @@ def cmd_collect(args: argparse.Namespace) -> int:
         f.create_dataset("average_t_end", data=average_t_end)
         dt = h5py.string_dtype(encoding="utf-8")
         # Per-run identity columns mirroring _write_runs_csv: rows here are one-per-executed-run, so in fd_gradients
-        # response mode base and perturbed runs land at duplicate rho values and response_label ("base" vs
-        # "fd_n_<species>" / "fd_t_<species>") is what distinguishes them.
+        # response mode base and perturbed runs land at duplicate rho values and the (response_label, perturb_species)
+        # pair is what distinguishes them.
         f.create_dataset("response_label", data=np.asarray([str(run.get("response_label", "base")) for run in runs], dtype=object), dtype=dt)
+        f.create_dataset("perturb_species", data=np.asarray([str(run.get("perturb_species", "none")) for run in runs], dtype=object), dtype=dt)
         f.create_dataset("perturb_delta", data=np.asarray([float(run.get("perturb_delta", 0.0)) for run in runs], dtype=float))
         grp = f.create_group("species")
         grp.create_dataset("names", data=np.asarray(species_names, dtype=object), dtype=dt)
@@ -1891,11 +1911,11 @@ def cmd_collect(args: argparse.Namespace) -> int:
     rho_index_sorted = rho_index_base[order]
     gamma_sorted = gamma_neopax_base[:, order]
     q_sorted = q_neopax_base[:, order]
-    perturb_labels: list[str] = []
+    perturb_keys: list[tuple[str, str]] = []
     for i in indices_perturbed:
-        label = str(runs[i]["response_label"])
-        if label not in perturb_labels:
-            perturb_labels.append(label)
+        key = (str(runs[i]["response_label"]), str(runs[i]["perturb_species"]))
+        if key not in perturb_keys:
+            perturb_keys.append(key)
     with h5py.File(neopax_flux_out, "w") as f:
         f.create_dataset("rho", data=rho_sorted)
         f.create_dataset("r", data=r_sorted)
@@ -1915,15 +1935,15 @@ def cmd_collect(args: argparse.Namespace) -> int:
         meta.attrs["conversion"] = "Gamma_r = a * Gamma_rho = a * Gamma_gB * n_ref[m^-3] * vth_ref[m/s] * rho_star^2; Q_r = a * Q_rho = a * Q_gB * T_ref[eV] * n_ref[m^-3] * vth_ref[m/s] * rho_star^2"
         meta.attrs["reference_species_name"] = str(manifest.get("normalization", {}).get("reference_species_name", ""))
         meta.attrs["manifest"] = str(Path(args.manifest).resolve())
-        if perturb_labels:
-            label_to_index = {label: i for i, label in enumerate(perturb_labels)}
+        if perturb_keys:
+            key_to_index = {key: i for i, key in enumerate(perturb_keys)}
             rho_index_to_axis = {int(rho_idx): axis for axis, rho_idx in enumerate(rho_index_sorted)}
-            gamma_perturbed = np.zeros((len(perturb_labels), len(species_names), rho_sorted.size), dtype=float)
-            q_perturbed = np.zeros((len(perturb_labels), len(species_names), rho_sorted.size), dtype=float)
-            perturb_delta = np.zeros((len(perturb_labels), rho_sorted.size), dtype=float)
-            perturb_present = np.zeros((len(perturb_labels), rho_sorted.size), dtype=bool)
+            gamma_perturbed = np.zeros((len(perturb_keys), len(species_names), rho_sorted.size), dtype=float)
+            q_perturbed = np.zeros((len(perturb_keys), len(species_names), rho_sorted.size), dtype=float)
+            perturb_delta = np.zeros((len(perturb_keys), rho_sorted.size), dtype=float)
+            perturb_present = np.zeros((len(perturb_keys), rho_sorted.size), dtype=bool)
             for i in indices_perturbed:
-                perturb_axis = label_to_index[str(runs[i]["response_label"])]
+                perturb_axis = key_to_index[(str(runs[i]["response_label"]), str(runs[i]["perturb_species"]))]
                 rho_axis = rho_index_to_axis.get(int(runs[i].get("rho_index", -1)))
                 if rho_axis is None:
                     continue
@@ -1937,7 +1957,12 @@ def cmd_collect(args: argparse.Namespace) -> int:
             f.create_dataset("perturb_present", data=perturb_present)
             f.create_dataset(
                 "response_label",
-                data=np.asarray(perturb_labels, dtype=object),
+                data=np.asarray([key[0] for key in perturb_keys], dtype=object),
+                dtype=dt,
+            )
+            f.create_dataset(
+                "perturb_species",
+                data=np.asarray([key[1] for key in perturb_keys], dtype=object),
                 dtype=dt,
             )
 
