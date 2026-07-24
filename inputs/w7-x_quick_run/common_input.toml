@@ -57,7 +57,7 @@ type = "dirichlet"
 
 [boundary.density.right.value]
 e = 0.29
-H = 0.29
+ion = 0.29
 
 [boundary.temperature.left]
 type = "neumann"
@@ -70,7 +70,7 @@ type = "dirichlet"
 
 [boundary.temperature.right.value]
 e = 0.8
-H = 0.8
+ion = 0.8
 
 [boundary.Er.left]
 type = "dirichlet"
