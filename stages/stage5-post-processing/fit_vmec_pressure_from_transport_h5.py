@@ -92,6 +92,41 @@ def _load_total_pressure(h5_path: Path, *, time_index: int, final_time: bool) ->
     return rho, total_pressure, resolved_index
 
 
+def _load_ion_temperature(h5_path: Path, *, time_index: int, final_time: bool) -> tuple[np.ndarray, int | None]:
+    with h5py.File(h5_path, "r") as f:
+        keys = set(f.keys())
+        if "temperature" not in keys:
+            raise KeyError(f"{h5_path} is missing required dataset 'temperature'")
+        temperature_all = np.asarray(f["temperature"][()])
+        resolved_index: int | None = None
+        if temperature_all.ndim >= 3:
+            resolved_index = _resolve_time_index(
+                temperature_all.shape[0],
+                time_index=int(time_index),
+                final_time=final_time,
+            )
+            temperature = np.asarray(temperature_all[resolved_index], dtype=float)
+        else:
+            temperature = _load_dataset_at_time(temperature_all, time_index)
+        if temperature.ndim != 2:
+            raise ValueError(f"Expected species-resolved temperature with shape (species, rho), got {temperature.shape}")
+        species_names = None
+        if "species_names" in keys:
+            species_names = [
+                bytes(name).decode("utf-8") if isinstance(name, bytes) else str(name)
+                for name in np.asarray(f["species_names"][()]).reshape(-1)
+            ]
+    ion_index = 0
+    if species_names:
+        ion_index = next(
+            (i for i, name in enumerate(species_names) if name.strip().lower() not in {"e", "electron"}),
+            0,
+        )
+    elif temperature.shape[0] > 1:
+        ion_index = 1
+    return np.asarray(temperature[ion_index], dtype=float), resolved_index
+
+
 def _fit_power_series(s: np.ndarray, p: np.ndarray, degree: int) -> np.ndarray:
     coeffs = np.polynomial.polynomial.polyfit(s, p, deg=int(degree))
     return np.asarray(coeffs, dtype=float)

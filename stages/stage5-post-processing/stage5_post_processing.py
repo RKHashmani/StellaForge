@@ -17,9 +17,15 @@ from pathlib import Path
 import numpy as np
 
 # Reuse the stage's pressure loader (sibling script in the same Stage 5 container).
-from fit_vmec_pressure_from_transport_h5 import _load_total_pressure
+from fit_vmec_pressure_from_transport_h5 import _load_ion_temperature, _load_total_pressure
 
 logger = logging.getLogger(__name__)
+
+
+def _relative_rms_drift(current: np.ndarray, reference: np.ndarray, *, atol: float, rtol: float) -> float:
+    scale = float(atol) + float(rtol) * np.maximum(np.abs(reference), np.abs(current))
+    normalized = (current - reference) / scale
+    return float(np.sqrt(np.mean(normalized**2) + 1.0e-30))
 
 
 def pressure_converged(transport: Path, *, rel_tol: float) -> bool:
@@ -70,14 +76,30 @@ def pressure_converged(transport: Path, *, rel_tol: float) -> bool:
     return rel_change < rel_tol
 
 
+def turbulence_rerun_needed(transport: Path, *, rtol: float, atol: float) -> bool:
+    """Return whether Stage 4 should be rerun from ion-temperature drift."""
+    t_initial, idx_initial = _load_ion_temperature(transport, time_index=0, final_time=False)
+    t_final, idx_final = _load_ion_temperature(transport, time_index=-1, final_time=True)
+    if idx_initial == idx_final:
+        logger.warning(
+            "%s has fewer than two distinct time slices for turbulence rerun detection "
+            "(initial index %s == final index %s); reporting no Stage 4 rerun.",
+            transport, idx_initial, idx_final,
+        )
+        return False
+    metric = _relative_rms_drift(t_final, t_initial, atol=atol, rtol=rtol)
+    logger.info("ion-temperature lagged-response drift metric = %.3e (rerun when > 1)", metric)
+    return metric > 1.0
+
+
 # --- Alternative Convergence Criteria ---
 def return_converged_false(transport: Path) -> bool:
     """Always report not converged (placeholder criterion, kept as an alternative)."""
     return False
 
 
-def build_signal(transport: Path, *, rel_tol: float) -> dict[str, bool]:
-    """Assemble the closed-loop signal the driver reads: ``{"converged", "halt"}``.
+def build_signal(transport: Path, *, rel_tol: float, turbulence_rtol: float, turbulence_atol: float) -> dict[str, bool]:
+    """Assemble the closed-loop signal the driver reads: ``{"converged", "halt", "rerun_stage4"}``.
 
     ``halt`` asks the loop driver to stop for a reason other than convergence.
 
@@ -103,7 +125,11 @@ def build_signal(transport: Path, *, rel_tol: float) -> dict[str, bool]:
             )
             return {"converged": False, "halt": True}
 
-    return {"converged": pressure_converged(transport, rel_tol=rel_tol), "halt": False}
+    return {
+        "converged": pressure_converged(transport, rel_tol=rel_tol),
+        "halt": False,
+        "rerun_stage4": turbulence_rerun_needed(transport, rtol=turbulence_rtol, atol=turbulence_atol),
+    }
 
 
 def main() -> None:
@@ -115,11 +141,24 @@ def main() -> None:
                         help="Output path for the convergence-status JSON the driver reads.")
     parser.add_argument("--pressure-rel-tol", type=float, required=True,
                         help="Relative RMS tolerance on the final-vs-initial total pressure profile.")
+    parser.add_argument("--turbulence-lagged-rtol", type=float, default=1.0e-2,
+                        help="Relative tolerance for the ion-temperature lagged-response drift metric.")
+    parser.add_argument("--turbulence-lagged-atol", type=float, default=1.0e-8,
+                        help="Absolute tolerance for the ion-temperature lagged-response drift metric.")
     args = parser.parse_args()
     if args.pressure_rel_tol <= 0.0:
         parser.error(f"--pressure-rel-tol must be positive, got {args.pressure_rel_tol}.")
+    if args.turbulence_lagged_rtol <= 0.0:
+        parser.error(f"--turbulence-lagged-rtol must be positive, got {args.turbulence_lagged_rtol}.")
+    if args.turbulence_lagged_atol <= 0.0:
+        parser.error(f"--turbulence-lagged-atol must be positive, got {args.turbulence_lagged_atol}.")
 
-    status = build_signal(args.transport, rel_tol=args.pressure_rel_tol)
+    status = build_signal(
+        args.transport,
+        rel_tol=args.pressure_rel_tol,
+        turbulence_rtol=args.turbulence_lagged_rtol,
+        turbulence_atol=args.turbulence_lagged_atol,
+    )
     args.signal.parent.mkdir(parents=True, exist_ok=True)
     args.signal.write_text(json.dumps(status) + "\n")
     print(f"# converge_status: {status}")
