@@ -1530,27 +1530,44 @@ def _time_average_columns(
     *,
     average_window: float,
     t_final_override: float | None,
+    average_reducer: str,
 ) -> tuple[dict[str, float], float, float]:
     if "t" not in columns:
         raise KeyError("Diagnostics CSV must contain a 't' column for time averaging")
     times = np.asarray(columns["t"], dtype=float)
     if times.size == 0:
         raise ValueError("Diagnostics CSV has an empty time axis")
-    t_end_data = float(times[-1])
-    t_end = t_end_data if t_final_override is None else float(t_final_override)
+    reducer = str(average_reducer).strip().lower()
+    if reducer == "t3d_median":
+        t_start = float(times[0])
+        t_end = float(times[-1])
+        return {
+            name: _t3d_median_estimator(np.asarray(values, dtype=float))
+            for name, values in columns.items()
+            if np.asarray(values, dtype=float).ndim == 1
+        }, t_start, t_end
+    t_end = float(times[-1]) if t_final_override is None else float(t_final_override)
     if float(average_window) <= 0.0:
         raise ValueError("--average-window must be > 0")
     t_start = max(float(times[0]), t_end - float(average_window))
     mask = times >= t_start
     if not np.any(mask):
         mask[-1] = True
-    out: dict[str, float] = {}
-    for name, values in columns.items():
-        arr = np.asarray(values, dtype=float)
-        if arr.ndim != 1:
-            continue
-        out[name] = float(np.nanmean(arr[mask]))
-    return out, t_start, t_end
+    return {
+        name: float(np.nanmean(np.asarray(values, dtype=float)[mask]))
+        for name, values in columns.items()
+        if np.asarray(values, dtype=float).ndim == 1
+    }, t_start, t_end
+
+
+def _t3d_median_estimator(values: np.ndarray) -> float:
+    valid = values[np.isfinite(values)]
+    if valid.size == 0:
+        return math.nan
+    if valid.size == 1:
+        return float(valid[0])
+    trailing_medians = [np.median(valid[::-1][:k]) for k in range(1, valid.size)]
+    return float(np.median(trailing_medians))
 
 
 def _write_summary_plots(
@@ -1784,6 +1801,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
                 columns,
                 average_window=float(args.average_window),
                 t_final_override=requested_t_final,
+                average_reducer=str(args.average_reducer),
             )
         except Exception as exc:
             print(f"failed to read diagnostics; zero-filling run fluxes: {diag_csv} ({exc})")
@@ -2272,6 +2290,12 @@ def _add_prepare_shaping_args(parser: argparse.ArgumentParser) -> None:
 
 def _add_collect_tuning_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--average-window", type=float, default=1.0, help="Average turbulent fluxes over the final time window")
+    parser.add_argument(
+        "--average-reducer",
+        choices=("window_mean", "t3d_median"),
+        default="window_mean",
+        help="Reduction used on the turbulent time trace: final-window mean or Trinity3D-style median estimator.",
+    )
     parser.add_argument("--plot", dest="plot", action="store_true", help="Write PNG plots of Gamma and Q versus rho.")
     parser.add_argument("--no-plot", dest="plot", action="store_false", help="Skip PNG plots.")
     parser.set_defaults(plot=True)
