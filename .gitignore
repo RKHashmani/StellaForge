@@ -218,3 +218,4 @@ outputs/
 inputs/*/
 !inputs/quick_run/
 !inputs/w7-x_quick_run/
+!inputs/w7-x_t3d_like/
