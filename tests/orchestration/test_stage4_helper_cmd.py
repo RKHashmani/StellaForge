@@ -34,7 +34,7 @@ _scan = load_stage_module(_STAGE4_SCRIPT)
 # scan-level flags. The t_max key is deliberately spelled --t-final, the prepare
 # parser's alias whose argparse dest is t_max.
 _PREPARE_OPTIONALS: list[tuple[str, str, object]] = [
-    ("profiles_source",               "--profiles-source",               "analytical"),
+    ("profiles_source",               "--profiles-source",               "prescribed"),  # the loop's iteration-2+ value, not the default
     ("neopax_result",                 "--neopax-result",                 "stage5_transport/transport_solution.h5"),
     ("nx",                            "--nx",                            12),
     ("ny",                            "--ny",                            12),

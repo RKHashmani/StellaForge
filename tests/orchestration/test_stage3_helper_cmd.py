@@ -32,7 +32,7 @@ _scan = load_stage_module(_STAGE3_SCRIPT)
 # scan-level parallelism flags. max_parallel is a retired key that older configs may
 # still carry; it must be ignored by every composer.
 _PREPARE_OPTIONALS: list[tuple[str, str, object]] = [
-    ("profiles_source",    "--profiles-source",    "analytical"),
+    ("profiles_source",    "--profiles-source",    "prescribed"),  # the loop's iteration-2+ value, not the default
     ("neopax_result",      "--neopax-result",      "outputs/quick_run/stage5_transport/transport_solution.h5"),
     ("ntheta",             "--ntheta",             5),
     ("nzeta",              "--nzeta",              11),

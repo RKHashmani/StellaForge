@@ -246,7 +246,7 @@ pixi install --manifest-path stages/pixi.toml --environment stage-5-neopax
 
 ### How to Run
 
-Stage 5 is orchestrated by Snakemake (`rule stage5_neopax`), which runs `neopax` on a config assembled from the upstream Stage 1/2/3/4 outputs. See the [Workflow Engine -- Snakemake](#workflow-engine----snakemake) section to run the forward pass through Stage 5, and [Closing the Loop](#closing-the-loop) for feeding the transport solution back to Stage 1.
+Stage 5 is orchestrated by Snakemake (`rule stage5_neopax`), which runs `neopax` on a config assembled from the upstream Stage 1/2/3/4 outputs. See the [Workflow Engine -- Snakemake](#workflow-engine----snakemake) section to run the forward pass through Stage 5, and [Closing the Loop](#closing-the-loop) for feeding the transport solution back into the next forward pass.
 
 > [!NOTE]
 > `NEOPAX`, being the final stage, has additional complexities. Ideally the script using `NEOPAX` runs a loop over `sfincs_jax` fluxes to optimize for ambipolarity, which is the most computationally expensive step in the pipeline.
@@ -403,7 +403,7 @@ Jobs that are already up to date are drawn with dashed borders. Prefer SVG: with
 
 ## Closing the Loop
 
-The pipeline can iterate toward a transport-consistent pressure profile by fitting a new Stage 1 boundary from Stage 5's transport solution and re-running the forward pass on it. Each iteration runs under its own `outputs/<run>/loop/iter_N/` tree, so the feedback never forms a cycle within a single Snakemake DAG; instead an external driver (`src/ouroboros.py`, exposed as the `ouroboros` pixi task) sequences the iterations, each as an independent Snakemake run, seeding each pass's boundary from the previous pass's fit. Committed inputs under `inputs/<run>/` are only ever read.
+The pipeline can iterate toward a transport-consistent state by feeding Stage 5's transport solution back into the next forward pass along two paths: a new Stage 1 boundary fit from the evolved pressure, and the evolved kinetic profiles prescribed to Stages 3, 4, and 5. Each iteration runs under its own `outputs/<run>/loop/iter_N/` tree, so the feedback never forms a cycle within a single Snakemake DAG; instead an external driver (`src/ouroboros.py`, exposed as the `ouroboros` pixi task) sequences the iterations, each as an independent Snakemake run, seeding each pass from the previous pass's feedback artifacts. Committed inputs under `inputs/<run>/` are only ever read.
 
 ### How to Run
 
@@ -427,12 +427,22 @@ pixi run -e pipeline ouroboros --max-iters 3 --cores 4
 Each iteration runs as an independent Snakemake pass with `input_dir`/`output_dir` overridden to that iteration's `outputs/<run>/loop/iter_N/{input,output}/`, targeting the **convergence signal file** rather than the default `rule all`. Targeting the signal pulls in `rule stage5_post_processing`, so the chain built is Stage 1 → … → Stage 5 → post-processing. Inside the Stage 5 container, post-processing:
 
 1. **Fits** a VMEC pressure profile from this pass's `transport_solution.h5` onto the base boundary and writes the evolved boundary to a *declared* `feedback` output under `outputs/<run>/loop/iter_N/output/stage5_post_processing/` (`fit_vmec_pressure_from_transport_h5.py write-input ... --output-input`). The committed input is read, never written, so the DAG stays acyclic.
-2. **Checks convergence** (`stage5_post_processing.py`), writing `converge_status.json` alongside it.
+2. **Prescribes** the evolved kinetic profiles: it copies this pass's `common_input.toml` and replaces the whole `[profiles]` section with `model = "prescribed"` plus the density, temperature, and `Er` arrays of the transport solution's final time slice, writing the copy to a *declared* `profiles_feedback` output beside the evolved boundary (`write_prescribed_profiles_from_transport_h5.py ... --output-toml`). Everything outside `[profiles]` is copied through unchanged, so the result is a drop-in template for the next pass.
+3. **Checks convergence** (`stage5_post_processing.py`), writing `converge_status.json` alongside them.
 
-The driver chains iterations by the fit: it seeds iteration N+1's `input/` with iteration N's evolved boundary, re-seeding the Stage 3/4/5 configs and run config from the base each pass. Committed inputs and templates are never mutated; every artifact lives under `outputs/<run>/loop/`.
+The driver chains iterations through both artifacts: it seeds iteration N+1's `input/` with iteration N's evolved boundary and its prescribed-profiles `common_input.toml`, re-seeding the Stage 3/4 configs and run config from the base each pass. From iteration 2 it also writes `loop_overrides.yaml` into that iteration's `input/`, setting `stage3.sfincs_jax.profiles_source` and `stage4.spectrax_gk.profiles_source` to `prescribed` so both stages read the seeded arrays instead of rebuilding analytical profiles. That file is appended **after** the base run config under the single `--configfile` flag, which Snakemake deep-merges in order with later files taking precedence; a second `--configfile` occurrence would replace the first and silently drop the base config. Committed inputs and templates are never mutated; every artifact lives under `outputs/<run>/loop/`.
 
 > [!NOTE]
-> A plain `snakemake` (e.g. `pixi run -e pipeline snakemake --configfile inputs/quick_run/config.yaml --cores 4`) builds `rule all` = the Stage 5 transport solution and **stops at Stage 5**, so it never runs the fit. The loop is opt-in: it is reached only by targeting the signal file, which `ouroboros` does for you.
+> From iteration 2 the Stage 3 scan therefore runs on the transport grid (`[geometry].n_radial` points, less the dropped magnetic-axis point, so 4 surfaces for quick_run) rather than the 51-point analytical grid `analytical_n_radii` requests, because the prescribed arrays exist only on the transport grid. This mirrors what `profiles_source: transport_h5` already does. Stage 4's quick-run grid is unchanged, since its `analytical_n_radii: null` already falls back to `[geometry].n_radial`.
+
+> [!NOTE]
+> A plain `snakemake` (e.g. `pixi run -e pipeline snakemake --configfile inputs/quick_run/config.yaml --cores 4`) builds `rule all` = the Stage 5 transport solution and **stops at Stage 5**, so it never runs the feedback step. The loop is opt-in: it is reached only by targeting the signal file, which `ouroboros` does for you.
+
+#### Prescribed `[profiles]` contract
+
+The emitted block stores profile values only, with no radial coordinate: rows follow `[species].names` and columns follow the radial grid `linspace(0, rho_edge, n_radial)` rebuilt from `[geometry]` (`rho_edge` defaults to `1.0`), which is the grid every reader reconstructs. The writer hard-fails when the transport solution's `rho` does not match that grid, so a mismatch fails the iteration instead of silently prescribing misaligned profiles.
+
+Values are SI, matching what NEOPAX's prescribed-profile model consumes: density in m^-3 and temperature in eV. The transport solution stores 1e20 m^-3 and keV, so the writer scales density by 1e20 and temperature by 1e3; `Er` is already in kV/m and passes through unchanged. The Stage 3 and 4 readers divide back to their internal 1e20 m^-3 and keV units.
 
 ### Why per-iteration `input_dir`/`output_dir`
 
@@ -440,7 +450,7 @@ Each iteration writes into its own `outputs/<run>/loop/iter_N/output/` tree. Thi
 
 ### Output layout
 
-Each iteration is fully self-contained under `outputs/<run>/loop/iter_N/`: `input/` holds that pass's seeded inputs and `output/` holds all of its stage outputs, including the evolved boundary and the convergence signal:
+Each iteration is fully self-contained under `outputs/<run>/loop/iter_N/`: `input/` holds that pass's seeded inputs and `output/` holds all of its stage outputs, including both feedback artifacts and the convergence signal:
 
 ```
 outputs/<run>/loop/iter_N/
@@ -449,12 +459,14 @@ outputs/<run>/loop/iter_N/
 │   ├── vmec_input.<run>                # boundary that fed this pass (base on iter 1, previous fit after)
 │   ├── sfincs_input.<run>
 │   ├── <run>.toml
-│   └── common_input.toml
+│   ├── common_input.toml               # shared Stage 3/4/5 config (base on iter 1, previous prescribed profiles after)
+│   └── loop_overrides.yaml             # iter 2 onward: switches Stages 3/4 to profiles_source: prescribed
 └── output/
     ├── stage1_equilibrium/ ... stage5_transport/   # the five forward-pass stage dirs
     └── stage5_post_processing/
         ├── converge_status.json        # convergence signal (the Snakemake target)
-        └── vmec_input.<run>            # evolved boundary, seeded into iter_{N+1}/input/
+        ├── vmec_input.<run>            # evolved boundary, seeded into iter_{N+1}/input/
+        └── common_input.toml           # prescribed profiles, seeded into iter_{N+1}/input/
 ```
 
 `<run>` is the configured `run_name` (e.g. `HSX_vacuum_ns201_quickrun`). Everything lives under `outputs/` (gitignored); committed inputs are untouched.
