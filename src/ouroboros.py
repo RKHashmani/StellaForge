@@ -1,7 +1,7 @@
 """Ouroboros: closed-loop driver (Stage 5 -> Stage 1 pressure feedback, Stage 5 -> Stages 3/4/5 profile feedback).
 
-Runs the forward pass repeatedly, feeding each iteration's evolved Stage 1 input common
-input into the next. After the first iteration, the driver also switches Stages 3 and 4
+Runs the forward pass repeatedly, feeding each iteration's evolved Stage 1 input and
+common input into the next. After the first iteration, the driver also switches Stages 3 and 4
 to ``profiles_source: prescribed`` via a config overrides file, so every profile consumer
 reads the transport-evolved profiles. Every iteration is self-contained under
 ``<output_dir>/loop/iter_N/``: ``input/`` holds that pass's seeded inputs and ``output/``
