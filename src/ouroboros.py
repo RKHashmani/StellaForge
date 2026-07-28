@@ -1,10 +1,12 @@
-"""Ouroboros: closed-loop driver (Stage 5 -> Stage 1 pressure feedback).
+"""Ouroboros: closed-loop driver (Stage 5 -> Stage 1 pressure feedback, Stage 5 -> Stages 3/4/5 profile feedback).
 
-Runs the forward pass repeatedly, feeding each iteration's evolved Stage 1 boundary
-into the next. Every iteration is self-contained under ``<output_dir>/loop/iter_N/``:
-``input/`` holds that pass's seeded inputs and ``output/`` holds all of its stage
-outputs (including the evolved boundary and the convergence signal). The committed
-inputs under ``input_dir`` are only ever read, never modified.
+Runs the forward pass repeatedly, feeding each iteration's evolved Stage 1 input common
+input into the next. After the first iteration, the driver also switches Stages 3 and 4
+to ``profiles_source: prescribed`` via a config overrides file, so every profile consumer
+reads the transport-evolved profiles. Every iteration is self-contained under
+``<output_dir>/loop/iter_N/``: ``input/`` holds that pass's seeded inputs and ``output/``
+holds all of its stage outputs (including both feedback artifacts and the convergence signal).
+The committed inputs under ``input_dir`` are only ever read, never modified.
 """
 
 from __future__ import annotations
@@ -41,14 +43,15 @@ def _seed_iteration_inputs(
     base_p: dict[str, str],
     iter_p: dict[str, str],
     s1_source: str,
+    s5_source: str,
     config_path: Path,
 ) -> None:
     """Populate one iteration's ``input/`` directory.
 
-    The Stage 3/4/5 configs are copied unchanged from the base ``input_dir`` every
-    iteration, the run config is copied alongside them for reproducibility, and the
-    Stage 1 boundary comes from ``s1_source`` (the base boundary on iteration 1, the
-    previous iteration's evolved boundary thereafter).
+    The Stage 3/4 configs and the run config are copied from the base inputs every
+    iteration. The Stage 1 boundary comes from ``s1_source`` and the ``common_input``
+    template from ``s5_source``, which point at the base files on iteration 1 and at
+    the previous iteration's evolved boundary and prescribed profiles afterward.
 
     Parameters
     ----------
@@ -58,13 +61,51 @@ def _seed_iteration_inputs(
         ``resolve_pipeline_paths`` output for the base config and for this iteration.
     s1_source : str
         Path to the Stage 1 boundary to seed as this iteration's ``s1_input``.
+    s5_source : str
+        Path to the ``common_input`` template to seed as this iteration's ``s5_config``.
     config_path : Path
         Run config file, copied into the iteration input dir as a record.
     """
-    for key in ("s3_config", "s4_config", "s5_config"):
+    for key in ("s3_config", "s4_config"):
         _seed(_abs(repo_root, base_p[key]), _abs(repo_root, iter_p[key]))
     _seed(config_path, _abs(repo_root, iter_p["input_dir"]) / config_path.name)
     _seed(_abs(repo_root, s1_source), _abs(repo_root, iter_p["s1_input"]))
+    _seed(_abs(repo_root, s5_source), _abs(repo_root, iter_p["s5_config"]))
+
+
+def _write_loop_overrides(iter_input_dir: Path) -> Path:
+    """Write the config overrides switching Stages 3 and 4 to prescribed profiles.
+
+    From iteration 2 the seeded ``common_input.toml`` carries prescribed profiles from
+    the previous iteration's transport solution, so Stages 3 and 4 must read those
+    instead of building analytical profiles.
+
+    Parameters
+    ----------
+    iter_input_dir : Path
+        The iteration's ``input/`` directory; the overrides file is written inside it
+        so every input that shaped the pass is recorded there.
+
+    Returns
+    -------
+    Path
+        Path of the written overrides file.
+    """
+    overrides = iter_input_dir / "loop_overrides.yaml"
+    overrides.parent.mkdir(parents=True, exist_ok=True)
+    overrides.write_text(
+        "# Written by the loop driver for iterations 2 and later: the seeded\n"
+        "# common_input.toml carries prescribed profiles from the previous iteration's\n"
+        "# transport solution, and Stages 3 and 4 must read those instead of the\n"
+        "# analytical profile parameters.\n"
+        "stage3:\n"
+        "  sfincs_jax:\n"
+        "    profiles_source: prescribed\n"
+        "stage4:\n"
+        "  spectrax_gk:\n"
+        "    profiles_source: prescribed\n"
+    )
+    return overrides
 
 
 def run_forward_pass(
@@ -75,18 +116,25 @@ def run_forward_pass(
     cores: int,
     config_path: Path,
     repo_root: Path,
+    extra_configfiles: list[Path] | None = None,
 ) -> None:
     """
-    Run one Snakemake forward pass for an iteration
+    Run one Snakemake forward pass for an iteration.
+
+    Parameters
+    ----------
+    extra_configfiles : list[Path], optional
+        Config files merged on top of ``config_path`` (e.g. the loop overrides that
+        switch Stages 3/4 to prescribed profiles from iteration 2 on).
     """
     logger.info("Forward pass [%s]: snakemake %s --cores %d", output_dir, target, cores)
-    subprocess.run(
-        ["snakemake", target, "--cores", str(cores),
-         "--configfile", str(config_path),
-         "--config", f"input_dir={input_dir}", f"output_dir={output_dir}"],
-        cwd=repo_root,
-        check=True,
-    )
+    # Extra config files are appended under the single --configfile flag. A second flag
+    # occurrence would replace the first and silently drop the base config. Later files
+    # take precedence in the deep merge, and --config key=value overrides apply last.
+    cmd = ["snakemake", target, "--cores", str(cores), "--configfile", str(config_path)]
+    cmd += [str(p) for p in (extra_configfiles or [])]
+    cmd += ["--config", f"input_dir={input_dir}", f"output_dir={output_dir}"]
+    subprocess.run(cmd, cwd=repo_root, check=True)
 
 
 def main() -> None:
@@ -113,8 +161,10 @@ def main() -> None:
     base_p = resolve_pipeline_paths(config)
 
     # Each iteration is an independent forward pass under '<output_dir>/loop/iter_N/'.
-    # The Stage 1 boundary comes from the previous iteration's evolved boundary. The
-    # other inputs are reseeded from the base each time. Distinct iter_N trees mean every
+    # The Stage 1 boundary and the common_input template come from the previous
+    # iteration's feedback artifacts; the other inputs are reseeded from the base each
+    # time. From iteration 2, an overrides file switches Stages 3/4 to the prescribed
+    # profiles carried by the seeded common_input. Distinct iter_N trees mean every
     # stage recomputes each iteration instead of reusing a cache.
     prev_p: dict[str, str] | None = None
     n = 0
@@ -125,13 +175,16 @@ def main() -> None:
         iter_p = resolve_pipeline_paths(config, input_dir=iter_in, output_dir=iter_out)
 
         s1_source = base_p["s1_input"] if n == 1 else prev_p["s1_feedback"]
+        s5_source = base_p["s5_config"] if n == 1 else prev_p["s5_config_feedback"]
         _seed_iteration_inputs(repo_root=repo_root, base_p=base_p, iter_p=iter_p,
-                               s1_source=s1_source, config_path=config_path)
+                               s1_source=s1_source, s5_source=s5_source, config_path=config_path)
 
+        extra_configfiles = None if n == 1 else [_write_loop_overrides(_abs(repo_root, iter_p["input_dir"]))]
         run_forward_pass(target=iter_p["s5_signal"], input_dir=iter_in, output_dir=iter_out,
-                         cores=args.cores, config_path=config_path, repo_root=repo_root)
+                         cores=args.cores, config_path=config_path, repo_root=repo_root,
+                         extra_configfiles=extra_configfiles)
 
-        prev_p = iter_p  # post-processing wrote iter_p['s1_feedback']; it seeds iteration n+1
+        prev_p = iter_p  # post-processing wrote both feedback artifacts; they seed iteration n+1
         signal = json.loads(_abs(repo_root, iter_p["s5_signal"]).read_text())
         if signal.get("halt"):
             logger.warning("Iteration %d: Stage 5 signalled a halt (pressure not sustained); "

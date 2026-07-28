@@ -34,6 +34,7 @@ EXPECTED_KEYS = {
     "stage4_manifest",
     "s5_resolved_config",
     "s1_feedback",
+    "s5_config_feedback",
 }
 
 
@@ -64,6 +65,8 @@ def test_quick_run_generated_paths(paths: dict) -> None:
     assert paths["s5_resolved_config"] == "outputs/quick_run/stage5_transport/common_input_updated.toml"
     # The evolved Stage 1 boundary the loop feeds back lives under the post-processing dir.
     assert paths["s1_feedback"] == "outputs/quick_run/stage5_post_processing/vmec_input.HSX_vacuum_ns201_quickrun"
+    # So does the prescribed-profiles common_input copy that seeds the next iteration.
+    assert paths["s5_config_feedback"] == "outputs/quick_run/stage5_post_processing/common_input.toml"
 
 
 def test_no_unsubstituted_run_name(paths: dict) -> None:
