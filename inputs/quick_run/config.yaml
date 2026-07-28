@@ -31,6 +31,16 @@ filenames:
 convergence:
   pressure_rel_tol: 1.0e-2
 
+# Per-stage rerun flags for the ouroboros closed-loop driver, where a stage set to false
+# is frozen and loop iterations after the first reuse its iteration 1 output.
+loop:
+  rerun:
+    stage1: true
+    stage2: true
+    stage3: true
+    stage4: true
+    stage5: true
+
 # Stage 3 SFINCS (sfincs_jax) radial scan.
 # Surface-level concurrency is controlled by `snakemake --cores`.
 stage3:
