@@ -339,3 +339,53 @@ def test_runs_csv_identity_columns(tmp_path: Path) -> None:
     assert [row["response_label"] for row in rows] == ["base", "density_gradient"]
     assert [row["perturb_species"] for row in rows] == ["none", "D"]
     assert [row["perturb_delta"] for row in rows] == ["0.0", "-0.5"]
+
+
+# --- prepare dispatch ---
+
+# A complete prescribed common-input template for prepare-level tests. The species block carries the
+# charge/mass arrays the species parser requires; the profile arrays are SI on the 5-point grid.
+PRESCRIBED_TOML = """\
+[species]
+names = ["e", "D", "T"]
+charge_qp = [-1.0, 1.0, 1.0]
+mass_mp = [0.000544617, 2.0, 3.0]
+
+[geometry]
+n_radial = 5
+
+[profiles]
+model = "prescribed"
+density = [[1.0e19, 1.1e19, 1.2e19, 1.3e19, 1.4e19], [5.0e18, 5.5e18, 6.0e18, 6.5e18, 7.0e18], [5.0e18, 5.5e18, 6.0e18, 6.5e18, 7.0e18]]
+temperature = [[1000.0, 900.0, 800.0, 700.0, 600.0], [950.0, 850.0, 750.0, 650.0, 550.0], [940.0, 840.0, 740.0, 640.0, 540.0]]
+Er = [0.0, 1.0, 2.0, 3.0, 4.0]
+"""
+
+
+# The snapshot tests elsewhere call _build_prescribed_snapshot directly, so the cmd_prepare branch that routes
+# --profiles-source=prescribed to it (with no NEOPAX result) would go untested without this. Running the real
+# cmd_prepare against a prescribed template and a synthetic VMEC file must succeed without any transport file, record
+# the source in the manifest, and scan exactly the prescribed 5-point grid minus the magnetic axis.
+def test_cmd_prepare_dispatches_prescribed_source(tmp_path: Path) -> None:
+    from tests.helpers.synthetic import write_wout
+
+    config = tmp_path / "common_input.toml"
+    config.write_text(PRESCRIBED_TOML)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    args = scan.build_parser().parse_args([
+        "prepare",
+        "--common-config", str(config),
+        "--spectrax-root", str(tmp_path),
+        "--output-dir", str(out_dir),
+        "--profiles-source", "prescribed",
+        "--vmec-file-override", str(write_wout(tmp_path / "wout_synth.nc")),
+    ])
+    assert scan.cmd_prepare(args) == 0
+    manifest = json.loads((out_dir / "manifest.json").read_text())
+    assert manifest["profiles_source"] == "prescribed"
+    assert not manifest.get("neopax_result")
+    assert [run["rho"] for run in manifest["runs"]] == [0.25, 0.5, 0.75, 1.0]
+    # The analytical fallback also lands on the 5-point [geometry] grid and profiles_source echoes the CLI, so only a
+    # snapshot-derived value proves the prescribed builder ran; the analytical Er is quadratic in rho, never this ramp.
+    assert manifest["source_er"] == [0.0, 1.0, 2.0, 3.0, 4.0]

@@ -59,6 +59,7 @@ S5_CONFIG = P["s5_config"]
 S5_OUTPUT = P["s5_output"]
 S5_SIGNAL = P["s5_signal"]
 S1_FEEDBACK = P["s1_feedback"]
+S5_CONFIG_FEEDBACK = P["s5_config_feedback"]
 
 STAGE3_CFG = config["stage3"]["sfincs_jax"]
 STAGE4_CFG = config["stage4"]["spectrax_gk"]
@@ -255,18 +256,24 @@ rule stage5_neopax:
         " 2>&1 | tee {log}"
 
 # Stage 5 post-processing closes the optimization loop and writes a convergence signal.
-# The evolved Stage 1 boundary is written under outputs/ (S1_FEEDBACK), never onto the
-# committed input. `rule all` stays S5_OUTPUT, so a plain `snakemake` is a pure forward pass.
+# Both the evolved Stage 1 input (S1_FEEDBACK) and the common input (S5_CONFIG_FEEDBACK)
+# land under outputs/. `rule all` stays S5_OUTPUT, so a plain `snakemake` is a pure forward pass.
 rule stage5_post_processing:
-    input:  S5_OUTPUT
+    input:
+        transport     = S5_OUTPUT,
+        s1_input      = S1_INPUT,
+        common_config = S5_CONFIG,
     output:
-        signal   = S5_SIGNAL,
-        feedback = S1_FEEDBACK,
+        signal            = S5_SIGNAL,
+        feedback          = S1_FEEDBACK,
+        profiles_feedback = S5_CONFIG_FEEDBACK,
     log:    f"{P['stage5_post_dir']}/{RUN_NAME}.log"
     shell:
         f'{DOCKER_PREFIX} {STAGE5_IMG} sh -c "'
         'python stages/stage5-post-processing/fit_vmec_pressure_from_transport_h5.py '
-        f'write-input {{input}} {S1_INPUT} --output-input {{output.feedback}} && '
+        'write-input {input.transport} {input.s1_input} --output-input {output.feedback} && '
+        'python stages/stage5-post-processing/write_prescribed_profiles_from_transport_h5.py '
+        '{input.transport} {input.common_config} --output-toml {output.profiles_feedback} && '
         'python stages/stage5-post-processing/stage5_post_processing.py '
-        f'--transport {{input}} --signal {{output.signal}} --pressure-rel-tol {PRESSURE_REL_TOL}"'
+        f'--transport {{input.transport}} --signal {{output.signal}} --pressure-rel-tol {PRESSURE_REL_TOL}"'
         " 2>&1 | tee {log}"

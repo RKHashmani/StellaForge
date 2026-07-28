@@ -54,8 +54,10 @@ def resolve_pipeline_paths(
         - paths generated under ``outputs/``: ``stage3_manifest`` and
           ``stage4_manifest`` (the per-surface scan manifests the prepare
           checkpoints write), ``s5_resolved_config`` (the path-resolved NEOPAX
-          copy NEOPAX actually runs), and ``s1_feedback`` (the evolved Stage 1
-          boundary the loop feeds to the next iteration).
+          copy NEOPAX actually runs), ``s1_feedback`` (the evolved Stage 1
+          boundary the loop feeds to the next iteration), and
+          ``s5_config_feedback`` (the ``common_input`` copy carrying prescribed
+          profiles from the transport solution, seeding the next iteration).
 
     Examples
     --------
@@ -122,4 +124,5 @@ def resolve_pipeline_paths(
         "stage4_manifest": f"{stage_dir('s4_output')}/{MANIFEST_BASENAME}",
         "s5_resolved_config": f"{stage_dir('s5_output')}/{RESOLVED_COMMON_CONFIG}",
         "s1_feedback": f"{stage_dir('s5_signal')}/{fn('s1_input')}",
+        "s5_config_feedback": f"{stage_dir('s5_signal')}/{fn('s5_config')}",
     }

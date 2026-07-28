@@ -9,6 +9,7 @@ needs no solver.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import ModuleType
 
 import numpy as np
@@ -107,3 +108,124 @@ def test_snapshot_species_density_ratios(module: ModuleType) -> None:
     snap = module._build_standard_analytical_snapshot(cfg, n_species=3, n_radial=5)
     assert_allclose(snap.density[1], 0.6 * snap.density[0], rtol=1e-12)
     assert_allclose(snap.density[2], 0.4 * snap.density[0], rtol=1e-12)
+
+
+# --- _build_prescribed_snapshot ---
+
+# Both stage scripts also carry a _build_prescribed_snapshot twin that reads the closed loop's fed-back [profiles]
+# arrays, so it gets the same dual-module drift guard. The prescribed block stores SI values (density in m^-3,
+# temperature in eV, Er in kV/m) while the snapshot uses 1e20 m^-3 and keV, and the block carries no radial
+# coordinate, so the builder must divide the units back and reconstruct the transport grid from [geometry].
+def _prescribed_cfg(n_species: int = 3, n_radial: int = 5) -> dict:
+    density = [[(s + 1) * (r + 1) * 1.0e19 for r in range(n_radial)] for s in range(n_species)]
+    temperature = [[(s + 1) * (r + 1) * 1.0e3 for r in range(n_radial)] for s in range(n_species)]
+    return {
+        "geometry": {"n_radial": n_radial, "rho_edge": 0.7},
+        "profiles": {
+            "model": "prescribed",
+            "density": density,
+            "temperature": temperature,
+            "Er": [float(r) for r in range(n_radial)],
+        },
+    }
+
+
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+def test_prescribed_snapshot_units_and_grid(module: ModuleType) -> None:
+    snap = module._build_prescribed_snapshot(_prescribed_cfg(), n_species=3)
+    expected = np.array([[(s + 1) * (r + 1) for r in range(5)] for s in range(3)], dtype=float)
+    assert_allclose(snap.density, expected * 0.1, rtol=1e-12)  # 1e19 m^-3 becomes 0.1 in 1e20 m^-3 units
+    assert_allclose(snap.temperature, expected, rtol=1e-12)  # 1e3 eV becomes 1 keV
+    assert_allclose(snap.er, np.arange(5.0), rtol=1e-12)  # kV/m passes through unchanged
+    assert_allclose(snap.rho, np.linspace(0.0, 0.7, 5), rtol=1e-12)
+    assert snap.time_value is None
+
+
+# A template without [geometry].rho_edge reconstructs the default full-radius grid.
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+def test_prescribed_snapshot_defaults_rho_edge(module: ModuleType) -> None:
+    cfg = _prescribed_cfg()
+    del cfg["geometry"]["rho_edge"]
+    snap = module._build_prescribed_snapshot(cfg, n_species=3)
+    assert_allclose(snap.rho, np.linspace(0.0, 1.0, 5), rtol=1e-12)
+
+
+# Only "prescribed" activates the builder. NEOPAX's "given" synonym is deliberately rejected too:
+# the loop's feedback writer always emits "prescribed", and accepting a second spelling here would
+# let Stage 3/4 configs drift from what the rest of the pipeline writes.
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+@pytest.mark.parametrize("model", ["standard_analytical", "given"])
+def test_prescribed_snapshot_rejects_other_models(module: ModuleType, model: str) -> None:
+    cfg = _prescribed_cfg()
+    cfg["profiles"]["model"] = model
+    with pytest.raises(ValueError, match="requires 'prescribed'"):
+        module._build_prescribed_snapshot(cfg, n_species=3)
+
+
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+@pytest.mark.parametrize("key", ["density", "temperature", "Er"])
+def test_prescribed_snapshot_requires_each_array(module: ModuleType, key: str) -> None:
+    cfg = _prescribed_cfg()
+    del cfg["profiles"][key]
+    with pytest.raises(ValueError, match=rf"\[profiles\]\.{key}"):
+        module._build_prescribed_snapshot(cfg, n_species=3)
+
+
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+def test_prescribed_snapshot_shape_validation(module: ModuleType) -> None:
+    with pytest.raises(ValueError, match="species rows"):
+        module._build_prescribed_snapshot(_prescribed_cfg(), n_species=2)
+    cfg = _prescribed_cfg()
+    cfg["profiles"]["Er"] = [0.0, 1.0]
+    with pytest.raises(ValueError, match=r"\[profiles\]\.Er"):
+        module._build_prescribed_snapshot(cfg, n_species=3)
+    cfg = _prescribed_cfg()
+    cfg["geometry"]["n_radial"] = 7
+    with pytest.raises(ValueError, match=r"\[geometry\]\.n_radial"):
+        module._build_prescribed_snapshot(cfg, n_species=3)
+    with pytest.raises(ValueError, match="at least 3"):
+        module._build_prescribed_snapshot(_prescribed_cfg(n_radial=2), n_species=3)
+
+
+# --- prepare dispatch ---
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# A complete prescribed common-input template for prepare-level tests. The species block carries the
+# charge/mass arrays the species parser requires; the profile arrays are SI on the 5-point grid.
+PRESCRIBED_TOML = """\
+[species]
+names = ["e", "D", "T"]
+charge_qp = [-1.0, 1.0, 1.0]
+mass_mp = [0.000544617, 2.0, 3.0]
+
+[geometry]
+n_radial = 5
+
+[profiles]
+model = "prescribed"
+density = [[1.0e19, 1.1e19, 1.2e19, 1.3e19, 1.4e19], [5.0e18, 5.5e18, 6.0e18, 6.5e18, 7.0e18], [5.0e18, 5.5e18, 6.0e18, 6.5e18, 7.0e18]]
+temperature = [[1000.0, 900.0, 800.0, 700.0, 600.0], [950.0, 850.0, 750.0, 650.0, 550.0], [940.0, 840.0, 740.0, 640.0, 540.0]]
+Er = [0.0, 1.0, 2.0, 3.0, 4.0]
+"""
+
+
+# The snapshot tests above call _build_prescribed_snapshot directly, so the dispatch branch in _prepare that routes
+# --profiles-source=prescribed to it (with no transport solution) would go untested without this. Running the real
+# _prepare against a prescribed template and the tracked sfincs template must succeed without any transport file,
+# record the source in the manifest, and scan exactly the prescribed 5-point grid minus the magnetic axis.
+def test_prepare_dispatches_prescribed_source(tmp_path: Path) -> None:
+    config = tmp_path / "common_input.toml"
+    config.write_text(PRESCRIBED_TOML)
+    args = scan.build_parser().parse_args([
+        "prepare",
+        "--common-config", str(config),
+        "--sfincs-template", str(REPO_ROOT / "inputs/quick_run/sfincs_input.HSX_vacuum_ns201_quickrun"),
+        "--output-dir", str(tmp_path / "out"),
+        "--profiles-source", "prescribed",
+    ])
+    manifest, pending = scan._prepare(args)
+    assert manifest["profiles_source"] == "prescribed"
+    assert manifest["source_transport_solution"] is None
+    assert [run["rho"] for run in manifest["runs"]] == [0.25, 0.5, 0.75, 1.0]
+    assert len(pending) == 4
