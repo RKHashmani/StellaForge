@@ -4,7 +4,7 @@ import json
 import posixpath
 
 from src import stage3_helper, stage4_helper, stage5_helper
-from src.utils import resolve_pipeline_paths, RESOLVED_COMMON_CONFIG
+from src.utils import resolve_pipeline_paths, resolve_rerun_flags, RESOLVED_COMMON_CONFIG
 
 # Require an explicit run config
 if not config:
@@ -22,6 +22,21 @@ DEVICE = config.get("device", "cpu")
 if DEVICE not in ("cpu", "gpu"):
     raise ValueError(
         f"config['device'] must be 'cpu' or 'gpu', got {DEVICE!r}."
+    )
+
+# Per-stage rerun flags for the closed loop, validated at parse time so a bad combination fails before any job runs.
+# Freezing a stage means reading its artifacts from an earlier pass, which takes an address from loop.reuse_output_dir.
+# A plain forward pass and the loop's first iteration therefore always run every stage.
+RERUN = resolve_rerun_flags(config)
+REUSE_OUTPUT_DIR = (config.get("loop") or {}).get("reuse_output_dir")
+if REUSE_OUTPUT_DIR is None:
+    RERUN = dict.fromkeys(RERUN, True)
+elif not isinstance(REUSE_OUTPUT_DIR, str):
+    raise ValueError(f"config['loop']['reuse_output_dir'] must be a path string, got {REUSE_OUTPUT_DIR!r}.")
+elif not RERUN["stage5"]:
+    raise ValueError(
+        "config['loop'] freezes every stage while naming a reuse tree, leaving no stage to produce the requested "
+        "target. The loop driver runs a single iteration for an all-frozen config instead of naming a reuse tree."
     )
 
 GPU_FLAG       = "--gpus all " if DEVICE == "gpu" else ""
@@ -61,6 +76,18 @@ S5_SIGNAL = P["s5_signal"]
 S1_FEEDBACK = P["s1_feedback"]
 S5_CONFIG_FEEDBACK = P["s5_config_feedback"]
 
+# Only cross-stage artifacts redirect. Manifests, run dirs, and logs belong to rules defined only when a stage reruns.
+if REUSE_OUTPUT_DIR is not None:
+    P_REUSE = resolve_pipeline_paths(config, output_dir=REUSE_OUTPUT_DIR)
+    if not RERUN["stage1"]:
+        S1_OUTPUT = P_REUSE["s1_output"]
+    if not RERUN["stage2"]:
+        S2_OUTPUT = P_REUSE["s2_output"]
+    if not RERUN["stage3"]:
+        S3_OUTPUT = P_REUSE["s3_output"]
+    if not RERUN["stage4"]:
+        S4_OUTPUT = P_REUSE["s4_output"]
+
 STAGE3_CFG = config["stage3"]["sfincs_jax"]
 STAGE4_CFG = config["stage4"]["spectrax_gk"]
 
@@ -84,23 +111,26 @@ rule all:
     input:
         S5_OUTPUT,
 
-rule stage1_vmec:
-    input:  S1_INPUT
-    output: S1_OUTPUT
-    log:    f"{P['stage1_dir']}/{RUN_NAME}.log"
-    shell:
-        f"{DOCKER_PREFIX} {STAGE1_IMG} "
-        f"vmec_jax {{input}} --output {{output}}"
-        " 2>&1 | tee {log}"
+# A frozen stage's rules are omitted from the workflow, so its reuse-tree artifacts cannot be rebuilt or overwritten.
+if RERUN["stage1"]:
+    rule stage1_vmec:
+        input:  S1_INPUT
+        output: S1_OUTPUT
+        log:    f"{P['stage1_dir']}/{RUN_NAME}.log"
+        shell:
+            f"{DOCKER_PREFIX} {STAGE1_IMG} "
+            f"vmec_jax {{input}} --output {{output}}"
+            " 2>&1 | tee {log}"
 
-rule stage2_boozer:
-    input:  S1_OUTPUT
-    output: S2_OUTPUT
-    log:    f"{P['stage2_dir']}/{RUN_NAME}.log"
-    shell:
-        f"{DOCKER_PREFIX} {STAGE2_IMG} "
-        "python stages/stage2-boozer/run_boozer.py --wout {input} --output {output}"
-        " 2>&1 | tee {log}"
+if RERUN["stage2"]:
+    rule stage2_boozer:
+        input:  S1_OUTPUT
+        output: S2_OUTPUT
+        log:    f"{P['stage2_dir']}/{RUN_NAME}.log"
+        shell:
+            f"{DOCKER_PREFIX} {STAGE2_IMG} "
+            "python stages/stage2-boozer/run_boozer.py --wout {input} --output {output}"
+            " 2>&1 | tee {log}"
 
 
 # Per-surface run-directory basenames e.g. rho_012_r0p4898 follow the pattern:
@@ -108,136 +138,138 @@ rule stage2_boozer:
 # Stage 4 fd_gradients mode adds perturbed siblings, e.g. rho_012_r0p4898_fd_n_D.
 SURF_PATTERN = r"rho_\d+_r[0-9p]+(?:_fd_[nt]_\w+)?"
 
-checkpoint stage3_prepare:
-    input:
-        config_file = S3_CONFIG,
-        wout        = S1_OUTPUT,
-        common_config = S5_CONFIG,
-    output:
-        S3_MANIFEST,
-    log:
-        f"{P['stage3_dir']}/{RUN_NAME}.prepare.log"
-    shell:
-        stage3_helper.prepare_cmd(
-            docker_prefix=DOCKER_PREFIX,
-            image=STAGE3_JAX_IMG,
-            stage_cfg=STAGE3_CFG,
-            output_dir=P["stage3_dir"],
-            device=DEVICE,
-        ) + " 2>&1 | tee {log}"
+if RERUN["stage3"]:
+    checkpoint stage3_prepare:
+        input:
+            config_file = S3_CONFIG,
+            wout        = S1_OUTPUT,
+            common_config = S5_CONFIG,
+        output:
+            S3_MANIFEST,
+        log:
+            f"{P['stage3_dir']}/{RUN_NAME}.prepare.log"
+        shell:
+            stage3_helper.prepare_cmd(
+                docker_prefix=DOCKER_PREFIX,
+                image=STAGE3_JAX_IMG,
+                stage_cfg=STAGE3_CFG,
+                output_dir=P["stage3_dir"],
+                device=DEVICE,
+            ) + " 2>&1 | tee {log}"
 
-rule stage3_run_one:
-    input:
-        manifest = S3_MANIFEST,
-    output:
-        f"{P['stage3_dir']}/runs/{{surf}}/result.json",
-    wildcard_constraints:
-        surf = SURF_PATTERN,
-    log:
-        f"{P['stage3_dir']}/runs/{{surf}}/run.log"
-    shell:
-        stage3_helper.run_one_cmd(
-            docker_prefix=DOCKER_PREFIX,
-            image=STAGE3_JAX_IMG,
-            stage_cfg=STAGE3_CFG,
-            output_dir=P["stage3_dir"],
-            device=DEVICE,
-        ) + " 2>&1 | tee {log}"
+    rule stage3_run_one:
+        input:
+            manifest = S3_MANIFEST,
+        output:
+            f"{P['stage3_dir']}/runs/{{surf}}/result.json",
+        wildcard_constraints:
+            surf = SURF_PATTERN,
+        log:
+            f"{P['stage3_dir']}/runs/{{surf}}/run.log"
+        shell:
+            stage3_helper.run_one_cmd(
+                docker_prefix=DOCKER_PREFIX,
+                image=STAGE3_JAX_IMG,
+                stage_cfg=STAGE3_CFG,
+                output_dir=P["stage3_dir"],
+                device=DEVICE,
+            ) + " 2>&1 | tee {log}"
 
-def stage3_surface_results(wildcards):
-    """List every per-surface result.json named by the Stage 3 manifest."""
-    manifest_path = checkpoints.stage3_prepare.get().output[0]
-    with open(manifest_path, encoding="utf-8") as fh:
-        manifest = json.load(fh)
-    return [
-        f"{P['stage3_dir']}/runs/{run['run_subdir']}/result.json"
-        for run in manifest["runs"]
-    ]
+    def stage3_surface_results(wildcards):
+        """List every per-surface result.json named by the Stage 3 manifest."""
+        manifest_path = checkpoints.stage3_prepare.get().output[0]
+        with open(manifest_path, encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        return [
+            f"{P['stage3_dir']}/runs/{run['run_subdir']}/result.json"
+            for run in manifest["runs"]
+        ]
 
-rule stage3_collect:
-    input:
-        manifest = S3_MANIFEST,
-        results  = stage3_surface_results,
-    output:
-        S3_OUTPUT,
-    log:
-        f"{P['stage3_dir']}/{RUN_NAME}.collect.log"
-    shell:
-        stage3_helper.collect_cmd(
-            docker_prefix=DOCKER_PREFIX,
-            image=STAGE3_JAX_IMG,
-            stage_cfg=STAGE3_CFG,
-            output_dir=P["stage3_dir"],
-            device=DEVICE,
-        ) + " 2>&1 | tee {log}"
+    rule stage3_collect:
+        input:
+            manifest = S3_MANIFEST,
+            results  = stage3_surface_results,
+        output:
+            S3_OUTPUT,
+        log:
+            f"{P['stage3_dir']}/{RUN_NAME}.collect.log"
+        shell:
+            stage3_helper.collect_cmd(
+                docker_prefix=DOCKER_PREFIX,
+                image=STAGE3_JAX_IMG,
+                stage_cfg=STAGE3_CFG,
+                output_dir=P["stage3_dir"],
+                device=DEVICE,
+            ) + " 2>&1 | tee {log}"
 
-checkpoint stage4_prepare:
-    input:
-        config_file = S4_CONFIG,
-        wout        = S1_OUTPUT,
-        boozer      = S2_OUTPUT,
-        common_config = S5_CONFIG,
-    output:
-        S4_MANIFEST,
-    log:
-        f"{P['stage4_dir']}/{RUN_NAME}.prepare.log"
-    shell:
-        stage4_helper.prepare_cmd(
-            docker_prefix=DOCKER_PREFIX,
-            image=STAGE4_IMG,
-            stage_cfg=STAGE4_CFG,
-            output_dir=P["stage4_dir"],
-            device=DEVICE,
-        ) + " 2>&1 | tee {log}"
+if RERUN["stage4"]:
+    checkpoint stage4_prepare:
+        input:
+            config_file = S4_CONFIG,
+            wout        = S1_OUTPUT,
+            boozer      = S2_OUTPUT,
+            common_config = S5_CONFIG,
+        output:
+            S4_MANIFEST,
+        log:
+            f"{P['stage4_dir']}/{RUN_NAME}.prepare.log"
+        shell:
+            stage4_helper.prepare_cmd(
+                docker_prefix=DOCKER_PREFIX,
+                image=STAGE4_IMG,
+                stage_cfg=STAGE4_CFG,
+                output_dir=P["stage4_dir"],
+                device=DEVICE,
+            ) + " 2>&1 | tee {log}"
 
-rule stage4_run_one:
-    input:
-        manifest = S4_MANIFEST,
-    output:
-        f"{P['stage4_dir']}/runs/{{surf}}/run.diagnostics.csv",
-    wildcard_constraints:
-        surf = SURF_PATTERN,
-    log:
-        f"{P['stage4_dir']}/runs/{{surf}}/run.log"
-    shell:
-        stage4_helper.run_one_cmd(
-            docker_prefix=DOCKER_PREFIX,
-            image=STAGE4_IMG,
-            stage_cfg=STAGE4_CFG,
-            output_dir=P["stage4_dir"],
-            device=DEVICE,
-        ) + " 2>&1 | tee {log}"
+    rule stage4_run_one:
+        input:
+            manifest = S4_MANIFEST,
+        output:
+            f"{P['stage4_dir']}/runs/{{surf}}/run.diagnostics.csv",
+        wildcard_constraints:
+            surf = SURF_PATTERN,
+        log:
+            f"{P['stage4_dir']}/runs/{{surf}}/run.log"
+        shell:
+            stage4_helper.run_one_cmd(
+                docker_prefix=DOCKER_PREFIX,
+                image=STAGE4_IMG,
+                stage_cfg=STAGE4_CFG,
+                output_dir=P["stage4_dir"],
+                device=DEVICE,
+            ) + " 2>&1 | tee {log}"
 
-def stage4_surface_diagnostics(wildcards):
-    """List every per-surface diagnostics CSV named by the Stage 4 manifest.
+    def stage4_surface_diagnostics(wildcards):
+        """List every per-surface diagnostics CSV named by the Stage 4 manifest.
 
-    Stage 4 manifest entries carry no run_subdir key, only the container-absolute
-    run_dir, so the host-side path is rebuilt from its POSIX basename.
-    """
-    manifest_path = checkpoints.stage4_prepare.get().output[0]
-    with open(manifest_path, encoding="utf-8") as fh:
-        manifest = json.load(fh)
-    return [
-        f"{P['stage4_dir']}/runs/{posixpath.basename(run['run_dir'])}/run.diagnostics.csv"
-        for run in manifest["runs"]
-    ]
+        Stage 4 manifest entries carry no run_subdir key, only the container-absolute
+        run_dir, so the host-side path is rebuilt from its POSIX basename.
+        """
+        manifest_path = checkpoints.stage4_prepare.get().output[0]
+        with open(manifest_path, encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        return [
+            f"{P['stage4_dir']}/runs/{posixpath.basename(run['run_dir'])}/run.diagnostics.csv"
+            for run in manifest["runs"]
+        ]
 
-rule stage4_collect:
-    input:
-        manifest = S4_MANIFEST,
-        diagnostics = stage4_surface_diagnostics,
-    output:
-        S4_OUTPUT,
-    log:
-        f"{P['stage4_dir']}/{RUN_NAME}.collect.log"
-    shell:
-        stage4_helper.collect_cmd(
-            docker_prefix=DOCKER_PREFIX,
-            image=STAGE4_IMG,
-            stage_cfg=STAGE4_CFG,
-            output_dir=P["stage4_dir"],
-            device=DEVICE,
-        ) + " 2>&1 | tee {log}"
+    rule stage4_collect:
+        input:
+            manifest = S4_MANIFEST,
+            diagnostics = stage4_surface_diagnostics,
+        output:
+            S4_OUTPUT,
+        log:
+            f"{P['stage4_dir']}/{RUN_NAME}.collect.log"
+        shell:
+            stage4_helper.collect_cmd(
+                docker_prefix=DOCKER_PREFIX,
+                image=STAGE4_IMG,
+                stage_cfg=STAGE4_CFG,
+                output_dir=P["stage4_dir"],
+                device=DEVICE,
+            ) + " 2>&1 | tee {log}"
 
 rule stage5_neopax:
     input:

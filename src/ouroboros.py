@@ -3,10 +3,14 @@
 Runs the forward pass repeatedly, feeding each iteration's evolved Stage 1 input and
 common input into the next. After the first iteration, the driver also switches Stages 3 and 4
 to ``profiles_source: prescribed`` via a config overrides file, so every profile consumer
-reads the transport-evolved profiles. Every iteration is self-contained under
-``<output_dir>/loop/iter_N/``: ``input/`` holds that pass's seeded inputs and ``output/``
-holds all of its stage outputs (including both feedback artifacts and the convergence signal).
+reads the transport-evolved profiles. Every iteration runs under its own
+``<output_dir>/loop/iter_N/``, where ``input/`` holds that pass's seeded inputs and ``output/``
+holds the stage outputs that pass computed (feedback artifacts and convergence signal).
 The committed inputs under ``input_dir`` are only ever read, never modified.
+
+An optional ``loop.rerun`` block in the run config flags stages false to freeze them. When a stage is
+frozen the overrides file also carries the flag map and the iteration 1 tree, so the Snakefile reads that
+stage's artifacts from there. With every stage frozen the driver runs a single forward pass and stops.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ from pathlib import Path
 
 import yaml
 
-from .utils import resolve_pipeline_paths
+from .utils import LOOP_STAGES, resolve_pipeline_paths, resolve_rerun_flags
 
 logger = logging.getLogger(__name__)
 
@@ -73,38 +77,81 @@ def _seed_iteration_inputs(
     _seed(_abs(repo_root, s5_source), _abs(repo_root, iter_p["s5_config"]))
 
 
-def _write_loop_overrides(iter_input_dir: Path) -> Path:
-    """Write the config overrides switching Stages 3 and 4 to prescribed profiles.
+def _write_loop_overrides(
+    iter_input_dir: Path,
+    *,
+    rerun: dict[str, bool] | None = None,
+    reuse_output_dir: str | None = None,
+) -> Path:
+    """Write the config overrides that iterations 2 and later are run with.
 
-    From iteration 2 the seeded ``common_input.toml`` carries prescribed profiles from
-    the previous iteration's transport solution, so Stages 3 and 4 must read those
-    instead of building analytical profiles.
+    Stages 3 and 4 are switched to ``profiles_source: prescribed`` when they rerun,
+    matching the profiles the seeded ``common_input.toml`` carries. When any stage is
+    frozen the file also adds the rerun flags and the iteration 1 tree.
 
     Parameters
     ----------
     iter_input_dir : Path
         The iteration's ``input/`` directory; the overrides file is written inside it
         so every input that shaped the pass is recorded there.
+    rerun : dict[str, bool], optional
+        Rerun flag for every stage, as returned by ``resolve_rerun_flags``. ``None``
+        means every stage reruns.
+    reuse_output_dir : str, optional
+        Output directory of iteration 1, required whenever a stage is frozen and unused
+        otherwise.
 
     Returns
     -------
     Path
         Path of the written overrides file.
+
+    Raises
+    ------
+    ValueError
+        If a stage is frozen while ``reuse_output_dir`` is ``None``.
     """
+    flags = {stage: True for stage in LOOP_STAGES} if rerun is None else rerun
+    frozen = [stage for stage in LOOP_STAGES if not flags[stage]]
+    if frozen and reuse_output_dir is None:
+        raise ValueError(
+            f"reuse_output_dir is required to write overrides that freeze {frozen}, because the Snakefile can only "
+            "reuse a frozen stage's artifacts once it is told which output tree holds them."
+        )
+
+    switched = [stage for stage in ("stage3", "stage4") if flags[stage]]
+    if not frozen:
+        text = (
+            "# Written by the loop driver for iterations 2 and later: the seeded\n"
+            "# common_input.toml carries prescribed profiles from the previous iteration's\n"
+            "# transport solution, and Stages 3 and 4 must read those instead of the\n"
+            "# analytical profile parameters.\n"
+        )
+    elif switched:
+        names = " and ".join(f"Stage {stage.removeprefix('stage')}" for stage in switched)
+        text = (
+            "# Written by the loop driver for iterations 2 and later. The seeded common_input.toml\n"
+            "# carries prescribed profiles from the previous iteration's transport solution, and\n"
+            f"# {names} must read those instead of the analytical profile parameters.\n"
+        )
+    else:
+        text = ""
+    for stage, section in (("stage3", "sfincs_jax"), ("stage4", "spectrax_gk")):
+        if flags[stage]:
+            text += f"{stage}:\n  {section}:\n    profiles_source: prescribed\n"
+    if frozen:
+        text += (
+            "# The loop block tells the Snakefile which stages are frozen and where iteration 1 wrote\n"
+            "# its outputs, so this pass reads their artifacts from that tree.\n"
+            "loop:\n"
+            "  rerun:\n"
+        )
+        text += "".join(f"    {stage}: {str(flags[stage]).lower()}\n" for stage in LOOP_STAGES)
+        text += f"  reuse_output_dir: {json.dumps(reuse_output_dir)}\n"
+
     overrides = iter_input_dir / "loop_overrides.yaml"
     overrides.parent.mkdir(parents=True, exist_ok=True)
-    overrides.write_text(
-        "# Written by the loop driver for iterations 2 and later: the seeded\n"
-        "# common_input.toml carries prescribed profiles from the previous iteration's\n"
-        "# transport solution, and Stages 3 and 4 must read those instead of the\n"
-        "# analytical profile parameters.\n"
-        "stage3:\n"
-        "  sfincs_jax:\n"
-        "    profiles_source: prescribed\n"
-        "stage4:\n"
-        "  spectrax_gk:\n"
-        "    profiles_source: prescribed\n"
-    )
+    overrides.write_text(text)
     return overrides
 
 
@@ -157,29 +204,45 @@ def main() -> None:
     repo_root = Path(__file__).resolve().parent.parent
     config_path = args.config if args.config.is_absolute() else repo_root / args.config
     config = yaml.safe_load(config_path.read_text())
+    rerun = resolve_rerun_flags(config)
+    if (config.get("loop") or {}).get("reuse_output_dir") is not None:
+        raise ValueError(
+            "config['loop']['reuse_output_dir'] is written by the driver into each iteration's loop_overrides.yaml "
+            "and must not appear in the run config, where it would freeze stages already in iteration 1."
+        )
     base_out = config["output_dir"]
     base_p = resolve_pipeline_paths(config)
 
-    # Each iteration is an independent forward pass under '<output_dir>/loop/iter_N/'.
-    # The Stage 1 boundary and the common_input template come from the previous
-    # iteration's feedback artifacts; the other inputs are reseeded from the base each
-    # time. From iteration 2, an overrides file switches Stages 3/4 to the prescribed
-    # profiles carried by the seeded common_input. Distinct iter_N trees mean every
-    # stage recomputes each iteration instead of reusing a cache.
+    max_iters = args.max_iters
+    if not any(rerun.values()):
+        logger.info("Every stage is frozen by loop.rerun, so no artifact can change between iterations; the driver "
+                    "runs a single forward pass and stops, ignoring --max-iters %d.", max_iters)
+        max_iters = 1
+    # Only a frozen stage needs the iteration 1 tree.
+    reuse_output_dir = None if all(rerun.values()) else f"{base_out}/loop/iter_1/output"
+
+    # Each iteration is an independent forward pass under '<output_dir>/loop/iter_N/'. The Stage 1 boundary and the
+    # common_input template come from the previous iteration's feedback artifacts; the other inputs are reseeded from
+    # the base each time. From iteration 2, an overrides file switches Stages 3/4 to the prescribed profiles carried by
+    # the seeded common_input. Distinct iter_N trees mean every stage recomputes each iteration instead of reusing a
+    # cache, except for a stage flagged false in loop.rerun, which reads its artifacts from the iter_1 tree from
+    # iteration 2 on. A frozen Stage 1 stays seeded from the base boundary, leaving the evolved boundary unconsumed.
     prev_p: dict[str, str] | None = None
     n = 0
-    for n in range(1, args.max_iters + 1):
+    for n in range(1, max_iters + 1):
         iter_in = f"{base_out}/loop/iter_{n}/input"
         iter_out = f"{base_out}/loop/iter_{n}/output"
-        logger.info("=== Iteration %d of %d (output=%s) ===", n, args.max_iters, iter_out)
+        logger.info("=== Iteration %d of %d (output=%s) ===", n, max_iters, iter_out)
         iter_p = resolve_pipeline_paths(config, input_dir=iter_in, output_dir=iter_out)
 
-        s1_source = base_p["s1_input"] if n == 1 else prev_p["s1_feedback"]
+        s1_source = base_p["s1_input"] if n == 1 or not rerun["stage1"] else prev_p["s1_feedback"]
         s5_source = base_p["s5_config"] if n == 1 else prev_p["s5_config_feedback"]
         _seed_iteration_inputs(repo_root=repo_root, base_p=base_p, iter_p=iter_p,
                                s1_source=s1_source, s5_source=s5_source, config_path=config_path)
 
-        extra_configfiles = None if n == 1 else [_write_loop_overrides(_abs(repo_root, iter_p["input_dir"]))]
+        extra_configfiles = None if n == 1 else [
+            _write_loop_overrides(_abs(repo_root, iter_p["input_dir"]), rerun=rerun, reuse_output_dir=reuse_output_dir)
+        ]
         run_forward_pass(target=iter_p["s5_signal"], input_dir=iter_in, output_dir=iter_out,
                          cores=args.cores, config_path=config_path, repo_root=repo_root,
                          extra_configfiles=extra_configfiles)

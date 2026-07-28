@@ -26,8 +26,11 @@ import src.ouroboros as ouroboros
 from src.utils import resolve_pipeline_paths
 
 
-def _write_config(tmp_path: Path) -> Path:
-    """Write a run config whose input/output dirs are absolute under tmp_path."""
+def _write_config(tmp_path: Path, loop: dict | None = None) -> Path:
+    """Write a run config whose input/output dirs are absolute under tmp_path.
+
+    Passing ``loop`` adds that block to the config, which is how the per-stage rerun flags reach the driver.
+    """
     config = {
         "run_name": "testrun",
         "input_dir": str(tmp_path / "in"),
@@ -45,6 +48,8 @@ def _write_config(tmp_path: Path) -> Path:
             "s5_signal": "converge_status.json",
         },
     }
+    if loop is not None:
+        config["loop"] = loop
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
@@ -186,7 +191,8 @@ def test_seed_iteration_inputs_copies_each_source(tmp_path: Path) -> None:
 
 # From iteration 2 the loop must pass an overrides file that flips Stages 3/4 to the prescribed profiles carried by the
 # seeded common_input.toml. This records the extra_configfiles each forward pass receives and checks the file's content:
-# none on iteration 1, and on iteration 2 a real YAML file setting profiles_source to prescribed for both stages.
+# none on iteration 1, and on iteration 2 a real YAML file setting profiles_source to prescribed for both stages. A run
+# that freezes nothing must not emit a loop block either, since that block is what makes the Snakefile drop stage rules.
 def test_loop_passes_prescribed_overrides_from_second_iteration(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -210,6 +216,7 @@ def test_loop_passes_prescribed_overrides_from_second_iteration(
     overrides = yaml.safe_load(extras[1][0].read_text())
     assert overrides["stage3"]["sfincs_jax"]["profiles_source"] == "prescribed"
     assert overrides["stage4"]["spectrax_gk"]["profiles_source"] == "prescribed"
+    assert "loop" not in overrides
     # The overrides file lives inside the iteration's input dir, alongside the seeded inputs.
     assert str(extras[1][0]).startswith(f"{tmp_path}/out/loop/iter_2/input")
 
@@ -239,3 +246,177 @@ def test_loop_short_circuits_on_terminal_signal(
 
     # A halt or converged signal after iteration 1 stops the loop despite max-iters=3.
     assert len(calls) == 1
+
+
+# A stage can only be frozen when every stage feeding it is frozen too, so freezing Stage 3 while Stage 1 still reruns
+# is rejected. The driver resolves the flags right after reading the config and before it creates anything, so a config
+# that can never run costs no files. This asserts main() raises and that no iteration tree was left behind.
+def test_main_rejects_frozen_stage_fed_by_a_rerunning_stage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, loop={"rerun": {"stage3": False}})
+    monkeypatch.setattr(ouroboros, "_seed_iteration_inputs", lambda **kw: None)
+    monkeypatch.setattr(ouroboros, "run_forward_pass", lambda **kw: None)
+    monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path)])
+
+    with pytest.raises(ValueError, match="stage3"):
+        ouroboros.main()
+
+    assert not (tmp_path / "out" / "loop").exists()
+
+
+# reuse_output_dir is the actuation signal the driver writes into loop_overrides.yaml for iterations 2 and later, so a
+# run config carrying it would freeze stages already in iteration 1 and in plain forward passes. The driver must reject
+# it at startup, before any iteration tree is created.
+def test_main_rejects_reuse_output_dir_in_run_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, loop={"reuse_output_dir": f"{tmp_path}/reuse"})
+    monkeypatch.setattr(ouroboros, "_seed_iteration_inputs", lambda **kw: None)
+    monkeypatch.setattr(ouroboros, "run_forward_pass", lambda **kw: None)
+    monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path)])
+
+    with pytest.raises(ValueError, match="reuse_output_dir"):
+        ouroboros.main()
+
+    assert not (tmp_path / "out" / "loop").exists()
+
+
+# With every stage frozen no artifact can change between iterations, so the loop has nothing left to feed forward and
+# must stop after one forward pass however many iterations were asked for. The fake run writes a signal that is neither
+# a halt nor a convergence, so a second pass would follow if the all-frozen case did not cap the iteration count.
+def test_loop_runs_a_single_pass_when_every_stage_is_frozen(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    frozen = {"stage1": False, "stage2": False, "stage3": False, "stage4": False, "stage5": False}
+    config_path = _write_config(tmp_path, loop={"rerun": frozen})
+    monkeypatch.setattr(ouroboros, "_seed_iteration_inputs", lambda **kw: None)
+
+    calls: list[str] = []
+
+    def fake_run(*, target, **kw):
+        calls.append(target)
+        signal = Path(target)
+        signal.parent.mkdir(parents=True, exist_ok=True)
+        signal.write_text(json.dumps({}))
+
+    monkeypatch.setattr(ouroboros, "run_forward_pass", fake_run)
+    monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path), "--max-iters", "3"])
+    ouroboros.main()
+
+    assert len(calls) == 1
+
+
+# Freezing Stage 1 pins the boundary, so every iteration must be seeded from the base boundary and the evolved boundary
+# that post-processing still writes must be passed over. The profile feedback is independent of that choice, so
+# iteration 2 must still take its common_input from iteration 1's prescribed-profiles output.
+def test_frozen_stage1_keeps_seeding_the_base_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, loop={"rerun": {"stage1": False}})
+    config = yaml.safe_load(config_path.read_text())
+    base_p = resolve_pipeline_paths(config)
+    base_out = config["output_dir"]
+    iter1_p = resolve_pipeline_paths(
+        config,
+        input_dir=f"{base_out}/loop/iter_1/input",
+        output_dir=f"{base_out}/loop/iter_1/output",
+    )
+
+    seeded: list[tuple[str, str]] = []
+    monkeypatch.setattr(ouroboros, "_seed_iteration_inputs",
+                        lambda **kw: seeded.append((kw["s1_source"], kw["s5_source"])))
+
+    def fake_run(*, target, **kw):
+        signal = Path(target)
+        signal.parent.mkdir(parents=True, exist_ok=True)
+        signal.write_text(json.dumps({}))
+
+    monkeypatch.setattr(ouroboros, "run_forward_pass", fake_run)
+    monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path), "--max-iters", "2"])
+    ouroboros.main()
+
+    assert seeded == [
+        (base_p["s1_input"], base_p["s5_config"]),
+        (base_p["s1_input"], iter1_p["s5_config_feedback"]),
+    ]
+
+
+def _overrides_of_second_iteration(monkeypatch: pytest.MonkeyPatch, config_path: Path) -> dict:
+    """Run two loop iterations and return iteration 2's parsed overrides file.
+
+    Only the two file-touching collaborators are faked, so the overrides file is written exactly as a real run would
+    write it while no solver runs and no input is copied.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture used to fake the collaborators and the command line.
+    config_path : Path
+        Run config handed to the driver.
+
+    Returns
+    -------
+    dict
+        Parsed contents of the overrides file iteration 2 was run with.
+    """
+    monkeypatch.setattr(ouroboros, "_seed_iteration_inputs", lambda **kw: None)
+
+    extras: list = []
+
+    def fake_run(*, target, extra_configfiles=None, **kw):
+        extras.append(extra_configfiles)
+        signal = Path(target)
+        signal.parent.mkdir(parents=True, exist_ok=True)
+        signal.write_text(json.dumps({}))
+
+    monkeypatch.setattr(ouroboros, "run_forward_pass", fake_run)
+    monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path), "--max-iters", "2"])
+    ouroboros.main()
+    return yaml.safe_load(extras[1][0].read_text())
+
+
+# The overrides file is the only channel telling the Snakefile which stages to leave out of an iteration, so with Stages
+# 1 and 2 frozen it must carry the complete five-stage flag map, not just the frozen ones, along with the iteration 1
+# output tree their artifacts stay in. The prescribed switch for the two stages that still rerun must survive alongside.
+def test_overrides_carry_rerun_flags_and_the_reuse_tree(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, loop={"rerun": {"stage1": False, "stage2": False}})
+
+    overrides = _overrides_of_second_iteration(monkeypatch, config_path)
+
+    assert overrides["stage3"]["sfincs_jax"]["profiles_source"] == "prescribed"
+    assert overrides["stage4"]["spectrax_gk"]["profiles_source"] == "prescribed"
+    assert overrides["loop"]["rerun"] == {
+        "stage1": False, "stage2": False, "stage3": True, "stage4": True, "stage5": True,
+    }
+    assert overrides["loop"]["reuse_output_dir"] == f"{tmp_path}/out/loop/iter_1/output"
+
+
+# A frozen stage never runs, so switching it to prescribed profiles would describe a run that does not happen. With
+# Stages 1 and 3 frozen the overrides file must drop the stage3 block entirely while still switching the Stage 4 run and
+# still carrying the loop block, since Stage 4 and Stage 5 do rerun and read the prescribed profiles.
+def test_overrides_omit_the_prescribed_switch_for_a_frozen_stage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config_path = _write_config(tmp_path, loop={"rerun": {"stage1": False, "stage3": False}})
+
+    overrides = _overrides_of_second_iteration(monkeypatch, config_path)
+
+    assert "stage3" not in overrides
+    assert overrides["stage4"]["spectrax_gk"]["profiles_source"] == "prescribed"
+    assert overrides["loop"]["rerun"]["stage3"] is False
+    assert overrides["loop"]["reuse_output_dir"] == f"{tmp_path}/out/loop/iter_1/output"
+
+
+# The Snakefile only switches into reuse mode when it sees loop.reuse_output_dir, so a call that passes no rerun flags
+# must keep producing the bare prescribed switch for Stages 3 and 4 with no loop block attached, leaving every run that
+# does not freeze anything exactly as it was.
+def test_write_loop_overrides_defaults_to_the_prescribed_switch_only(tmp_path: Path) -> None:
+    path = ouroboros._write_loop_overrides(tmp_path)
+
+    assert yaml.safe_load(path.read_text()) == {
+        "stage3": {"sfincs_jax": {"profiles_source": "prescribed"}},
+        "stage4": {"spectrax_gk": {"profiles_source": "prescribed"}},
+    }
+
+
+# Naming a frozen stage without naming the tree its artifacts live in would leave the Snakefile unable to find them, so
+# that combination is a driver bug rather than a bad config and must fail at the write instead of producing a file the
+# Snakefile would reject later.
+def test_write_loop_overrides_requires_a_reuse_tree_when_a_stage_is_frozen(tmp_path: Path) -> None:
+    flags = {"stage1": False, "stage2": True, "stage3": True, "stage4": True, "stage5": True}
+
+    with pytest.raises(ValueError, match="reuse_output_dir"):
+        ouroboros._write_loop_overrides(tmp_path, rerun=flags)
