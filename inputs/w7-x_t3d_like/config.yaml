@@ -80,11 +80,11 @@ stage4:
     # rho_indices: "1,2,3"    # comma-separated explicit indices instead of the window
 
     # --- Resolution / time window ---
-    nx: 12
-    ny: 12
-    ntheta: 30
-    t_max: 10.0
-    average_window: 1.0
+    nx: 64
+    ny: 64
+    ntheta: 64
+    t_max: 500.0
+    average_window: 100
     sample_stride: 50
     diagnostics_stride: 1
 
