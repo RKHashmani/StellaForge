@@ -188,3 +188,115 @@ def test_perturbed_manifest_expands_fan_out(tmp_path: Path) -> None:
     assert result.returncode == 0, output
     assert "stage4_run_one" in output, output
     assert "rho_001_r0p2500_fd_n_D" in output, output
+
+
+# From iteration 2 with frozen stages, the driver's overrides file names the iteration 1 tree and restates the validated
+# rerun map. This freezes Stages 1 and 2 exactly as the driver would (via the real overrides writer), fakes their
+# artifacts in the reuse tree, and asserts the plan omits both frozen rules while still scheduling Stages 3/4/5 and
+# post-processing, with the composed prepare commands reading the wout and boozmn from the reuse tree rather than the
+# current output tree. Omitted rules mean Snakemake treats the reuse-tree files as plain inputs it can never rebuild,
+# so iteration 1 records cannot be overwritten by a later pass.
+def test_frozen_stages_absent_from_plan(tmp_path: Path) -> None:
+    config = yaml.safe_load((REPO_ROOT / "inputs/quick_run/config.yaml").read_text())
+    reuse = resolve_pipeline_paths(config, output_dir=f"{tmp_path}/reuse")
+    for key in ("s1_output", "s2_output"):
+        artifact = Path(reuse[key])
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("")
+    overrides = _write_loop_overrides(
+        tmp_path,
+        rerun={"stage1": False, "stage2": False, "stage3": True, "stage4": True, "stage5": True},
+        reuse_output_dir=reuse["output_dir"],
+    )
+    s5_signal = resolve_pipeline_paths(config, output_dir=f"{tmp_path}/out")["s5_signal"]
+    result = _dry_run(tmp_path, targets=[s5_signal], config_overrides=[],
+                      extra_configfiles=[str(overrides)], printshellcmds=True)
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    for rule in ("stage3_prepare", "stage4_prepare", "stage5_neopax", "stage5_post_processing"):
+        assert rule in output, f"rule {rule} not scheduled:\n{output}"
+    # The Stage 2 output directory is also named stage2_boozer, and it legitimately appears in the reuse-tree paths
+    # of the planned commands, so frozen rules are matched against the job header form instead of the bare name.
+    for rule in ("rule stage1_vmec:", "rule stage2_boozer:"):
+        assert rule not in output, f"frozen {rule.rstrip(':')} scheduled:\n{output}"
+    # The composed commands must consume the frozen artifacts from the reuse tree, not the current output tree.
+    assert reuse["s1_output"] in output, output
+    assert reuse["s2_output"] in output, output
+
+
+# A frozen Stage 3 keeps its iteration 1 provenance. The overrides carry no stage3 profiles_source switch, so the only
+# prescribed flag in the plan belongs to the rerunning Stage 4, and no stage3 rule is scheduled at all. The parse-time
+# NEOPAX config copy must also point its neoclassical_file at the reuse tree through an upward-walking relative path,
+# because NEOPAX resolves file references against its own output directory. Absent rerun keys default to true, which
+# this pins by freezing {stage1, stage3} while leaving the other three stages implicit.
+def test_frozen_stage3_keeps_iter1_provenance(tmp_path: Path) -> None:
+    config = yaml.safe_load((REPO_ROOT / "inputs/quick_run/config.yaml").read_text())
+    reuse = resolve_pipeline_paths(config, output_dir=f"{tmp_path}/reuse")
+    for key in ("s1_output", "s3_output"):
+        artifact = Path(reuse[key])
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("")
+    overrides = tmp_path / "loop_overrides.yaml"
+    overrides.write_text(
+        "stage4:\n"
+        "  spectrax_gk:\n"
+        "    profiles_source: prescribed\n"
+        "loop:\n"
+        "  rerun:\n"
+        "    stage1: false\n"
+        "    stage3: false\n"
+        f"  reuse_output_dir: {reuse['output_dir']}\n"
+    )
+    paths_out = resolve_pipeline_paths(config, output_dir=f"{tmp_path}/out")
+    result = _dry_run(tmp_path, targets=[paths_out["s5_signal"]], config_overrides=[],
+                      extra_configfiles=[str(overrides)], printshellcmds=True)
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "stage3_prepare" not in output, output
+    # Stage 2 stays rerunnable while its Stage 1 input is frozen, recomputing the Boozer transform from the reuse wout.
+    assert "stage2_boozer" in output, output
+    assert output.count("--profiles-source prescribed") == 1, output
+    assert "--profiles-source analytical" not in output, output
+    resolved = Path(paths_out["s5_resolved_config"]).read_text()
+    assert 'neoclassical_file = "../../reuse/stage3_neoclassical/sfincs_jax_flux_profiles.h5"' in resolved, resolved
+
+
+# The rerun flags are validated at Snakefile parse time even without a reuse tree, so a hand-edited config freezing a
+# stage whose input stages still rerun is rejected before any job runs, mirroring the device guard.
+def test_invalid_rerun_combo_fails_at_parse(tmp_path: Path) -> None:
+    overrides = tmp_path / "loop_overrides.yaml"
+    overrides.write_text("loop:\n  rerun:\n    stage2: false\n")
+    result = _dry_run(tmp_path, targets=[], config_overrides=[], extra_configfiles=[str(overrides)])
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "config['loop']['rerun']['stage2']" in output, output
+
+
+# Rerun flags without a reuse tree must not change the plan. Only the loop driver provides loop.reuse_output_dir, so a
+# base config carrying frozen flags still plans the full forward pass on a plain invocation and on iteration 1.
+def test_rerun_flags_without_a_reuse_tree_leave_plan_unchanged(tmp_path: Path) -> None:
+    overrides = tmp_path / "loop_overrides.yaml"
+    overrides.write_text(
+        "loop:\n  rerun:\n    stage1: false\n    stage2: false\n    stage3: false\n    stage4: false\n"
+    )
+    result = _dry_run(tmp_path, targets=[], config_overrides=[], extra_configfiles=[str(overrides)])
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    for rule in FORWARD_RULES:
+        assert rule in output, f"rule {rule} not scheduled:\n{output}"
+
+
+# Freezing every stage while naming a reuse tree leaves nothing to build, so the Snakefile rejects it at parse time.
+# The driver never emits this shape because an all-frozen config stops after iteration 1 without naming a reuse tree.
+def test_reuse_tree_with_all_frozen_fails_at_parse(tmp_path: Path) -> None:
+    overrides = tmp_path / "loop_overrides.yaml"
+    overrides.write_text(
+        "loop:\n"
+        "  rerun:\n"
+        "    stage1: false\n    stage2: false\n    stage3: false\n    stage4: false\n    stage5: false\n"
+        f"  reuse_output_dir: {tmp_path}/reuse\n"
+    )
+    result = _dry_run(tmp_path, targets=[], config_overrides=[], extra_configfiles=[str(overrides)])
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "freezes every stage" in output, output
