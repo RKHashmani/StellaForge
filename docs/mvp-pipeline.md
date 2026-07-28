@@ -261,7 +261,7 @@ Automates the MVP forward pass end-to-end: `Stage 1 -> {Stage 2, Stage 3, Stage 
 
 | Direction | Format              | Location                                                                                                                                                           |
 | --------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **In**    | YAML config         | `inputs/quick_run/config.yaml` (keys: `run_name`, `device`, `input_dir`, `output_dir`, `filenames`, `stage3`, `stage4`)                                            |
+| **In**    | YAML config         | `inputs/quick_run/config.yaml` (keys: `run_name`, `device`, `input_dir`, `output_dir`, `filenames`, `convergence`, `loop`, `stage3`, `stage4`)                                            |
 | **In**    | Workflow definition | `Snakefile`                                                                                                                                                        |
 | **In**    | Per-stage inputs    | `inputs/quick_run/` (all stage inputs, flat)                                                                                                                       |
 | **Out**   | Stage 2 NetCDF      | `outputs/quick_run/stage2_boozer/boozmn_HSX_vacuum_ns201_quickrun.nc`                                                                                              |
@@ -430,7 +430,7 @@ Each iteration runs as an independent Snakemake pass with `input_dir`/`output_di
 2. **Prescribes** the evolved kinetic profiles: it copies this pass's `common_input.toml` and replaces the whole `[profiles]` section with `model = "prescribed"` plus the density, temperature, and `Er` arrays of the transport solution's final time slice, writing the copy to a *declared* `profiles_feedback` output beside the evolved boundary (`write_prescribed_profiles_from_transport_h5.py ... --output-toml`). Everything outside `[profiles]` is copied through unchanged, so the result is a drop-in template for the next pass.
 3. **Checks convergence** (`stage5_post_processing.py`), writing `converge_status.json` alongside them.
 
-The driver chains iterations through both artifacts: it seeds iteration N+1's `input/` with iteration N's evolved boundary and its prescribed-profiles `common_input.toml`, re-seeding the Stage 3/4 configs and run config from the base each pass. From iteration 2 it also writes `loop_overrides.yaml` into that iteration's `input/`, setting `stage3.sfincs_jax.profiles_source` and `stage4.spectrax_gk.profiles_source` to `prescribed` so both stages read the seeded arrays instead of rebuilding analytical profiles. That file is appended **after** the base run config under the single `--configfile` flag, which Snakemake deep-merges in order with later files taking precedence; a second `--configfile` occurrence would replace the first and silently drop the base config. Committed inputs and templates are never mutated; every artifact lives under `outputs/<run>/loop/`.
+The driver chains iterations through both artifacts: it seeds iteration N+1's `input/` with iteration N's evolved boundary and its prescribed-profiles `common_input.toml`, re-seeding the Stage 3/4 configs and run config from the base each pass. From iteration 2 it also writes `loop_overrides.yaml` into that iteration's `input/`, setting `stage3.sfincs_jax.profiles_source` and `stage4.spectrax_gk.profiles_source` to `prescribed` so both stages read the seeded arrays instead of rebuilding analytical profiles. When [per-stage rerun flags](#per-stage-rerun-flags) freeze part of the pipeline, the same file also records the rerun map and the iteration 1 tree its artifacts are reused from, and the `prescribed` switch is written only for whichever of Stages 3 and 4 still rerun. That file is appended **after** the base run config under the single `--configfile` flag, which Snakemake deep-merges in order with later files taking precedence; a second `--configfile` occurrence would replace the first and silently drop the base config. Committed inputs and templates are never mutated; every artifact lives under `outputs/<run>/loop/`.
 
 > [!NOTE]
 > From iteration 2 the Stage 3 scan therefore runs on the transport grid (`[geometry].n_radial` points, less the dropped magnetic-axis point, so 4 surfaces for quick_run) rather than the 51-point analytical grid `analytical_n_radii` requests, because the prescribed arrays exist only on the transport grid. This mirrors what `profiles_source: transport_h5` already does. Stage 4's quick-run grid is unchanged, since its `analytical_n_radii: null` already falls back to `[geometry].n_radial`.
@@ -446,11 +446,37 @@ Values are SI, matching what NEOPAX's prescribed-profile model consumes: density
 
 ### Why per-iteration `input_dir`/`output_dir`
 
-Each iteration writes into its own `outputs/<run>/loop/iter_N/output/` tree. This is load-bearing: Stages 3 and 4 cache their per-radius runs keyed by output directory, so a single shared output dir would reuse the first pass's cache and feed Stage 5 **stale** neoclassical/turbulent fluxes on every subsequent pass. Distinct `iter_N` trees force Stages 3/4 to recompute each iteration.
+Each iteration writes into its own `outputs/<run>/loop/iter_N/output/` tree. This is load-bearing: Stages 3 and 4 cache their per-radius runs keyed by output directory, so a single shared output dir would reuse the first pass's cache and feed Stage 5 **stale** neoclassical/turbulent fluxes on every subsequent pass. Distinct `iter_N` trees force Stages 3/4 to recompute each iteration by default. Skipping that recomputation stays opt-in and explicit rather than a stale-cache accident, since the only sanctioned way to ask for it is [`loop.rerun`](#per-stage-rerun-flags), which makes the Snakefile omit the frozen stage's rules and point its consumers at the iteration 1 tree by name.
+
+### Per-stage rerun flags
+
+Not every stage has to be recomputed on every pass. The optional `loop.rerun` block in the run config freezes the ones that do not:
+
+```yaml
+loop:
+  rerun:
+    stage1: true
+    stage2: true
+    stage3: true
+    stage4: true
+    stage5: true
+```
+
+Omitted keys default to `true`, so an absent block reproduces exactly the behavior described above. A stage set to `false` is **frozen**. Iteration 1 always runs the full pipeline; from iteration 2 a frozen stage's rules are left out of the workflow entirely and the rules consuming its artifacts read them straight out of `outputs/<run>/loop/iter_1/output/`. Nothing is copied, and because no rule in the pass can produce those files, the iteration 1 records can never be overwritten by a later pass. Deleting them mid-run simply fails the next iteration with Snakemake's ordinary missing-input error.
+
+**Legal combinations.** A frozen stage must never be paired with regenerated upstream input, so every stage it reads from has to be frozen as well. Stage 2 reads Stage 1; Stage 3 reads Stage 1 only (the neoclassical scan takes the wout, never the boozmn); Stage 4 reads Stages 1 and 2; Stage 5 reads Stages 1 through 4. Eight frozen sets survive that rule -- `{}`, `{1}`, `{1,2}`, `{1,3}`, `{1,2,3}`, `{1,2,4}`, `{1,2,3,4}`, and all five. Anything else raises a `ValueError` from the shared helper `resolve_rerun_flags` (`src/utils/loop.py`), at driver startup and again at Snakefile parse time, before any job runs.
+
+**How the flags take effect.** A plain `snakemake` never freezes anything; it validates the block and then treats every stage as rerunning. The flags bite only through the driver's `loop_overrides.yaml`, which from iteration 2 restates the validated flag map under `loop.rerun` and adds `loop.reuse_output_dir: <output_dir>/loop/iter_1/output`. The Snakefile drops a stage's rules only when that reuse tree is present in the merged config, which is why iteration 1 and every non-loop invocation still build the whole pipeline.
+
+**Frozen Stage 1.** Freezing the equilibrium deliberately drops the boundary half of the feedback. Every iteration reseeds its `s1_input` from the base inputs, holding the geometry fixed while the profiles evolve. Post-processing still writes the evolved boundary under `stage5_post_processing/` for inspection; it is simply not consumed.
+
+**Provenance.** The `profiles_source: prescribed` override is emitted only for the stages that rerun, so a frozen Stage 3 or 4 keeps recording the `analytical` source its iteration 1 run actually used.
+
+**All five frozen.** Nothing can change between iterations, so the driver logs that, runs one forward pass, and stops regardless of `--max-iters`.
 
 ### Output layout
 
-Each iteration is fully self-contained under `outputs/<run>/loop/iter_N/`: `input/` holds that pass's seeded inputs and `output/` holds all of its stage outputs, including both feedback artifacts and the convergence signal:
+Each iteration runs under its own `outputs/<run>/loop/iter_N/`: `input/` holds that pass's seeded inputs and `output/` holds the stage outputs that pass computed, including both feedback artifacts and the convergence signal. A stage frozen by [`loop.rerun`](#per-stage-rerun-flags) leaves no directory here after iteration 1; its artifacts remain in `iter_1/output/`:
 
 ```
 outputs/<run>/loop/iter_N/
@@ -460,9 +486,9 @@ outputs/<run>/loop/iter_N/
 │   ├── sfincs_input.<run>
 │   ├── <run>.toml
 │   ├── common_input.toml               # shared Stage 3/4/5 config (base on iter 1, previous prescribed profiles after)
-│   └── loop_overrides.yaml             # iter 2 onward: switches Stages 3/4 to profiles_source: prescribed
+│   └── loop_overrides.yaml             # iter 2 onward; switches rerunning Stages 3/4 to prescribed, plus any frozen stages and their reuse tree
 └── output/
-    ├── stage1_equilibrium/ ... stage5_transport/   # the five forward-pass stage dirs
+    ├── stage1_equilibrium/ ... stage5_transport/   # stage dirs this pass ran (frozen stages appear only under iter_1)
     └── stage5_post_processing/
         ├── converge_status.json        # convergence signal (the Snakemake target)
         ├── vmec_input.<run>            # evolved boundary, seeded into iter_{N+1}/input/
