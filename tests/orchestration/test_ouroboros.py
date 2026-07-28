@@ -79,6 +79,32 @@ def test_run_forward_pass_builds_snakemake_argv(monkeypatch: pytest.MonkeyPatch)
     assert captured["kwargs"]["check"] is True
 
 
+# Snakemake's --configfile is a nargs="+" argument, so extra config files must be appended after the base config file
+# under the same single flag (a second --configfile occurrence would replace the first). This pins that argv shape:
+# extras go between the base config file and the --config overrides.
+def test_run_forward_pass_appends_extra_configfiles(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_subprocess_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+
+    monkeypatch.setattr(ouroboros.subprocess, "run", fake_subprocess_run)
+    ouroboros.run_forward_pass(
+        target="out/converge_status.json",
+        input_dir="in",
+        output_dir="out",
+        cores=4,
+        config_path=Path("cfg.yaml"),
+        repo_root=Path("/repo"),
+        extra_configfiles=[Path("in/loop_overrides.yaml")],
+    )
+    assert captured["cmd"] == [
+        "snakemake", "out/converge_status.json", "--cores", "4",
+        "--configfile", "cfg.yaml", "in/loop_overrides.yaml",
+        "--config", "input_dir=in", "output_dir=out",
+    ]
+
+
 # Checks input validation and its ordering. It runs `main()` with `--max-iters 0` and a config path that doesn't exist.
 # The test asserts it raises ValueError about max-iters (not a file-not-found error), proving the loop-count guard runs
 # before the config is ever read.
@@ -90,10 +116,11 @@ def test_main_rejects_nonpositive_max_iters(monkeypatch: pytest.MonkeyPatch) -> 
         ouroboros.main()
 
 
-# Verifies the "ouroboros" feedback: each iteration should start from the previous iteration's evolved boundary. It
-# monkeypatches the two file-touching helpers (so no solver runs, but a signal file is still written), records which
-# boundary file each iteration is seeded from, and asserts iteration 1 seeds from the base input while iteration 2 seeds
-# from iteration 1's feedback output.
+# Verifies the "ouroboros" feedback for both evolving inputs. Each iteration should seed the Stage 1 boundary and the
+# shared common_input template from the previous iteration's feedback artifacts. It monkeypatches the two file-touching
+# helpers (so no solver runs, but a signal file is still written), records the (s1_source, s5_source) pair each
+# iteration is handed, and asserts iteration 1 seeds from the base inputs while iteration 2 seeds from iteration 1's
+# feedback outputs.
 def test_loop_seeds_from_previous_feedback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
     config = yaml.safe_load(config_path.read_text())
@@ -105,9 +132,9 @@ def test_loop_seeds_from_previous_feedback(monkeypatch: pytest.MonkeyPatch, tmp_
         output_dir=f"{base_out}/loop/iter_1/output",
     )
 
-    seeded: list[str] = []
+    seeded: list[tuple[str, str]] = []
     monkeypatch.setattr(ouroboros, "_seed_iteration_inputs",
-                        lambda **kw: seeded.append(kw["s1_source"]))
+                        lambda **kw: seeded.append((kw["s1_source"], kw["s5_source"])))
 
     def fake_run(*, target, **kw):
         signal = Path(target)
@@ -118,8 +145,73 @@ def test_loop_seeds_from_previous_feedback(monkeypatch: pytest.MonkeyPatch, tmp_
     monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path), "--max-iters", "2"])
     ouroboros.main()
 
-    # Iteration 1 seeds the base boundary; iteration 2 seeds the prior iteration's feedback.
-    assert seeded == [base_p["s1_input"], iter1_p["s1_feedback"]]
+    assert seeded == [
+        (base_p["s1_input"], base_p["s5_config"]),
+        (iter1_p["s1_feedback"], iter1_p["s5_config_feedback"]),
+    ]
+
+
+# The loop tests above mock _seed_iteration_inputs, so this exercises the real copies once. Stage 3/4 configs and the
+# run config must come from the base inputs while s1_input and s5_config come from the s1_source/s5_source arguments.
+# Distinct file contents prove each destination received its intended source rather than a sibling's.
+def test_seed_iteration_inputs_copies_each_source(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    config = yaml.safe_load(config_path.read_text())
+    base_p = resolve_pipeline_paths(config)
+    iter_p = resolve_pipeline_paths(
+        config,
+        input_dir=f"{config['output_dir']}/loop/iter_2/input",
+        output_dir=f"{config['output_dir']}/loop/iter_2/output",
+    )
+    for key in ("s3_config", "s4_config"):
+        base = Path(base_p[key])
+        base.parent.mkdir(parents=True, exist_ok=True)
+        base.write_text(f"base {key}")
+    s1_source = tmp_path / "evolved_boundary"
+    s1_source.write_text("evolved boundary")
+    s5_source = tmp_path / "prescribed_common_input.toml"
+    s5_source.write_text("prescribed profiles")
+
+    ouroboros._seed_iteration_inputs(
+        repo_root=tmp_path, base_p=base_p, iter_p=iter_p,
+        s1_source=str(s1_source), s5_source=str(s5_source), config_path=config_path,
+    )
+
+    assert Path(iter_p["s3_config"]).read_text() == "base s3_config"
+    assert Path(iter_p["s4_config"]).read_text() == "base s4_config"
+    assert Path(iter_p["s1_input"]).read_text() == "evolved boundary"
+    assert Path(iter_p["s5_config"]).read_text() == "prescribed profiles"
+    assert (Path(iter_p["input_dir"]) / config_path.name).read_text() == config_path.read_text()
+
+
+# From iteration 2 the loop must pass an overrides file that flips Stages 3/4 to the prescribed profiles carried by the
+# seeded common_input.toml. This records the extra_configfiles each forward pass receives and checks the file's content:
+# none on iteration 1, and on iteration 2 a real YAML file setting profiles_source to prescribed for both stages.
+def test_loop_passes_prescribed_overrides_from_second_iteration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config_path = _write_config(tmp_path)
+    monkeypatch.setattr(ouroboros, "_seed_iteration_inputs", lambda **kw: None)
+
+    extras: list = []
+
+    def fake_run(*, target, extra_configfiles=None, **kw):
+        extras.append(extra_configfiles)
+        signal = Path(target)
+        signal.parent.mkdir(parents=True, exist_ok=True)
+        signal.write_text(json.dumps({}))
+
+    monkeypatch.setattr(ouroboros, "run_forward_pass", fake_run)
+    monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path), "--max-iters", "2"])
+    ouroboros.main()
+
+    assert extras[0] is None
+    assert len(extras[1]) == 1
+    overrides = yaml.safe_load(extras[1][0].read_text())
+    assert overrides["stage3"]["sfincs_jax"]["profiles_source"] == "prescribed"
+    assert overrides["stage4"]["spectrax_gk"]["profiles_source"] == "prescribed"
+    # The overrides file lives inside the iteration's input dir, alongside the seeded inputs.
+    assert str(extras[1][0]).startswith(f"{tmp_path}/out/loop/iter_2/input")
 
 
 # The loop should stop early when a run reports it has converged or been told to halt. `@pytest.mark.parametrize` runs

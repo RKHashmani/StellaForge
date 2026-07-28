@@ -27,6 +27,7 @@ from pathlib import Path
 
 import yaml
 
+from src.ouroboros import _write_loop_overrides
 from src.utils import resolve_pipeline_paths
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -44,11 +45,22 @@ FORWARD_RULES = (
 DEFERRED_RULES = ("stage3_run_one", "stage4_run_one")
 
 
-def _dry_run(tmp_path: Path, targets: list[str], config_overrides: list[str]) -> subprocess.CompletedProcess:
-    """Plan the quick_run DAG with ``snakemake -n``, redirecting every write under ``tmp_path``."""
+def _dry_run(
+    tmp_path: Path,
+    targets: list[str],
+    config_overrides: list[str],
+    extra_configfiles: list[str] | None = None,
+    printshellcmds: bool = False,
+) -> subprocess.CompletedProcess:
+    """Plan the quick_run DAG with ``snakemake -n``, redirecting every write under ``tmp_path``.
+
+    ``extra_configfiles`` are appended after the base config file under the same single
+    ``--configfile`` flag, exactly as the loop driver passes its overrides file, and
+    ``printshellcmds`` adds ``-p`` so planned shell commands can be asserted on.
+    """
     return subprocess.run(
-        ["snakemake", "-n", *targets,
-         "--configfile", "inputs/quick_run/config.yaml",
+        ["snakemake", "-n", *(["-p"] if printshellcmds else []), *targets,
+         "--configfile", "inputs/quick_run/config.yaml", *(extra_configfiles or []),
          "--workflow-profile", "none",
          "--runtime-source-cache-path", f"{tmp_path}/srccache",
          "--config", f"output_dir={tmp_path}/out", *config_overrides],
@@ -88,6 +100,30 @@ def test_s5_signal_target_schedules_post_processing(tmp_path: Path) -> None:
     # Requesting the convergence signal pulls in the loop-closing rule and formats its
     # shell string, which rule all (a pure forward pass) never reaches.
     assert "stage5_post_processing" in output, output
+
+
+# From iteration 2 the loop driver appends its loop_overrides.yaml after the base config file, switching both stage
+# prepares to the prescribed profiles carried by the seeded common_input.toml. This plans the loop-closing target with
+# and without that overrides file (written by the real driver helper) and asserts the printed shell commands flip from
+# analytical to prescribed, and that the post-processing rule always invokes the prescribed-profiles writer.
+def test_loop_overrides_switch_stage_prepares_to_prescribed(tmp_path: Path) -> None:
+    config = yaml.safe_load((REPO_ROOT / "inputs/quick_run/config.yaml").read_text())
+    s5_signal = resolve_pipeline_paths(config, output_dir=f"{tmp_path}/out")["s5_signal"]
+
+    baseline = _dry_run(tmp_path, targets=[s5_signal], config_overrides=[], printshellcmds=True)
+    output = baseline.stdout + baseline.stderr
+    assert baseline.returncode == 0, output
+    assert output.count("--profiles-source analytical") == 2, output
+    assert "write_prescribed_profiles_from_transport_h5.py" in output, output
+    assert "--output-toml" in output, output
+
+    overrides = _write_loop_overrides(tmp_path)
+    result = _dry_run(tmp_path, targets=[s5_signal], config_overrides=[],
+                      extra_configfiles=[str(overrides)], printshellcmds=True)
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert output.count("--profiles-source prescribed") == 2, output
+    assert "--profiles-source analytical" not in output, output
 
 
 # The Snakefile validates the `device` config at parse time, before any job runs. This dry-runs with `device=bogus` and
