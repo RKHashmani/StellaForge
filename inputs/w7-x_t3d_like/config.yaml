@@ -8,8 +8,8 @@ run_name: w7x_t3d_reconstruction
 device: cpu
 
 
-input_dir: inputs/w7-x_quick_run
-output_dir: outputs/w7-x_quick_run
+input_dir: inputs/w7-x_t3d_like
+output_dir: outputs/w7-x_t3d_like
 
 # Input basenames (under input_dir); output basenames (under output_dir/stageN_<name>/).
 filenames:
