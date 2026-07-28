@@ -442,6 +442,76 @@ def _build_standard_analytical_snapshot(
     )
 
 
+def _require_profile_array(profile_cfg: dict[str, Any], key: str, *, ndim: int) -> np.ndarray:
+    """Read a required ``[profiles]`` array as float64 and check its dimensionality."""
+    if key not in profile_cfg:
+        raise ValueError(f"[profiles].{key} is required when --profiles-source=prescribed")
+    array = np.asarray(profile_cfg[key], dtype=np.float64)
+    if array.ndim != ndim:
+        raise ValueError(f"[profiles].{key} must be {ndim}-D, got shape {array.shape}")
+    return array
+
+
+def _build_prescribed_snapshot(cfg: dict[str, Any], *, n_species: int) -> ProfileSnapshot:
+    """Build a snapshot from the prescribed profile arrays stored in the config ``[profiles]`` section.
+
+    The prescribed arrays are SI (density m^-3, temperature eV), so both are divided by the
+    NEOPAX reference values to reach the snapshot units of 1e20 m^-3 and keV. Er is kV/m in
+    both and passes through unchanged. The arrays carry no radial coordinate, so the grid is
+    rebuilt from the same ``[geometry]`` block the transport solver builds its own grid from.
+
+    Parameters
+    ----------
+    cfg : dict[str, Any]
+        Parsed common-input TOML.
+    n_species : int
+        Number of species the run expects, taken from ``[species].names``.
+
+    Returns
+    -------
+    ProfileSnapshot
+        Profiles on the reconstructed radial grid, in snapshot units.
+    """
+    profile_cfg = cfg.get("profiles", {})
+    model = str(profile_cfg.get("model", "")).strip().lower()
+    if model != "prescribed":
+        raise ValueError(f"[profiles].model is {model!r}; --profiles-source=prescribed requires 'prescribed'")
+    density = _require_profile_array(profile_cfg, "density", ndim=2)
+    temperature = _require_profile_array(profile_cfg, "temperature", ndim=2)
+    er = _require_profile_array(profile_cfg, "Er", ndim=1)
+    if temperature.shape != density.shape:
+        raise ValueError(
+            f"[profiles].temperature has shape {temperature.shape}, expected the [profiles].density "
+            f"shape {density.shape}"
+        )
+    if density.shape[0] != n_species:
+        raise ValueError(
+            f"[profiles].density holds {density.shape[0]} species rows, expected {n_species} to match "
+            "the number of entries in [species].names"
+        )
+    n_radial = int(density.shape[1])
+    if er.size != n_radial:
+        raise ValueError(f"[profiles].Er holds {er.size} points, expected {n_radial} to match [profiles].density")
+    geometry_cfg = cfg.get("geometry", {})
+    if "n_radial" not in geometry_cfg:
+        raise ValueError("[geometry].n_radial is required when --profiles-source=prescribed")
+    if n_radial != int(geometry_cfg["n_radial"]):
+        raise ValueError(
+            f"[profiles] arrays hold {n_radial} radial points, expected {int(geometry_cfg['n_radial'])} "
+            "to match [geometry].n_radial"
+        )
+    if n_radial < 3:
+        raise ValueError(f"[profiles] arrays hold {n_radial} radial points, expected at least 3 for radial gradients")
+    rho_edge = float(geometry_cfg.get("rho_edge", 1.0))
+    return ProfileSnapshot(
+        rho=np.linspace(0.0, rho_edge, n_radial, dtype=np.float64),
+        density=density / NEOPAX_DENSITY_REFERENCE_M3,
+        temperature=temperature / NEOPAX_TEMPERATURE_REFERENCE_EV,
+        er=er,
+        time_value=None,
+    )
+
+
 def _infer_ntss_snapshot(h5_path: Path, species: list[SpeciesMeta]) -> ProfileSnapshot:
     density_map = {
         "e": "ne",
@@ -1173,8 +1243,11 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             raise ValueError("--neopax-result is required when --profiles-source=transport_h5")
         neopax_result = Path(args.neopax_result).resolve()
         snapshot = load_neopax_snapshot(neopax_result, species, time_index=int(args.time_index))
+    elif profiles_source == "prescribed":
+        snapshot = _build_prescribed_snapshot(cfg, n_species=len(species))
+        neopax_result = None
     else:
-        raise ValueError("--profiles-source must be 'transport_h5' or 'analytical'")
+        raise ValueError("--profiles-source must be 'transport_h5', 'analytical', or 'prescribed'")
     rho_indices = _choose_radius_indices(
         snapshot.rho,
         explicit=_parse_index_list(args.rho_indices),
@@ -1202,7 +1275,12 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     print(f"Wrote manifest: {manifest_path}")
     print(f"Wrote run table: {csv_path}")
     print(f"Wrote normalization audit: {output_dir / 'normalization_audit.csv'}")
-    source_label = "analytical profiles from TOML" if neopax_result is None else neopax_result.name
+    if neopax_result is not None:
+        source_label = neopax_result.name
+    elif profiles_source == "prescribed":
+        source_label = "prescribed profiles from TOML"
+    else:
+        source_label = "analytical profiles from TOML"
     print(f"Prepared {len(manifest['runs'])} SPECTRAX-GK runs from {source_label}")
     return 0
 
@@ -2173,7 +2251,7 @@ def _add_common_io_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_prepare_shaping_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--profiles-source", choices=("transport_h5", "analytical"), default="analytical")
+    parser.add_argument("--profiles-source", choices=("transport_h5", "analytical", "prescribed"), default="analytical")
     parser.add_argument("--time-index", type=int, default=-1)
     parser.add_argument("--analytical-n-radii", type=int, default=None, help="Number of analytical rho points; defaults to [geometry].n_radial from the NEOPAX config")
     parser.add_argument("--electron-model", choices=("adiabatic", "kinetic"), default=None)
