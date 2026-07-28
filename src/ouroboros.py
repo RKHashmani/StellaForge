@@ -205,6 +205,11 @@ def main() -> None:
     config_path = args.config if args.config.is_absolute() else repo_root / args.config
     config = yaml.safe_load(config_path.read_text())
     rerun = resolve_rerun_flags(config)
+    if (config.get("loop") or {}).get("reuse_output_dir") is not None:
+        raise ValueError(
+            "config['loop']['reuse_output_dir'] is written by the driver into each iteration's loop_overrides.yaml "
+            "and must not appear in the run config, where it would freeze stages already in iteration 1."
+        )
     base_out = config["output_dir"]
     base_p = resolve_pipeline_paths(config)
 

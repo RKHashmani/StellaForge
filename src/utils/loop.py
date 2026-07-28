@@ -11,7 +11,9 @@ from __future__ import annotations
 LOOP_STAGES: tuple[str, ...] = ("stage1", "stage2", "stage3", "stage4", "stage5")
 
 # Stages whose output artifacts each stage reads directly, taken from the Snakefile rule inputs. Stage 3 reads only the
-# Stage 1 equilibrium and never the Boozer transform.
+# Stage 1 equilibrium and never the Boozer transform. The map covers stage outputs only. Stages 3 and 4 also read the
+# common_input profiles, which evolve each iteration, so freezing either deliberately keeps fluxes computed from an
+# earlier pass's profiles.
 _STAGE_INPUTS: dict[str, tuple[str, ...]] = {
     "stage2": ("stage1",),
     "stage3": ("stage1",),
@@ -20,7 +22,7 @@ _STAGE_INPUTS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _read_optional_mapping(container: dict, key: str, label: str) -> dict:
+def _read_optional_mapping(container: dict, key: str, label: str, expected: str) -> dict:
     """Return one nested mapping from a config, treating an absent or null value as empty.
 
     Parameters
@@ -31,6 +33,8 @@ def _read_optional_mapping(container: dict, key: str, label: str) -> dict:
         Key to look up.
     label : str
         Config path shown in the error message, for example ``config['loop']['rerun']``.
+    expected : str
+        Description of the mapping's contents shown in the error message, for example ``stage name to true/false``.
 
     Returns
     -------
@@ -47,7 +51,7 @@ def _read_optional_mapping(container: dict, key: str, label: str) -> dict:
     if value is None:
         return {}
     if not isinstance(value, dict):
-        raise ValueError(f"{label} must be a mapping of stage name to true/false, got {type(value).__name__}.")
+        raise ValueError(f"{label} must be a mapping of {expected}, got {type(value).__name__}.")
     return value
 
 
@@ -75,8 +79,8 @@ def _check_frozen_stage_inputs(flags: dict[str, bool]) -> None:
         if rerunning:
             raise ValueError(
                 f"config['loop']['rerun']['{stage}'] is false but {rerunning} still rerun, so the frozen {stage} "
-                f"output would be paired with regenerated upstream input and go stale. Freeze {rerunning} as well, "
-                f"or let {stage} rerun."
+                f"output would be paired with regenerated upstream stage outputs and go stale. Freeze {rerunning} "
+                f"as well, or let {stage} rerun."
             )
 
 
@@ -106,8 +110,8 @@ def resolve_rerun_flags(config: dict) -> dict[str, bool]:
     set, ``{stage1}``, ``{stage1, stage2}``, ``{stage1, stage3}``, ``{stage1, stage2, stage3}``,
     ``{stage1, stage2, stage4}``, ``{stage1, stage2, stage3, stage4}``, and all five stages.
     """
-    loop = _read_optional_mapping(config, "loop", "config['loop']")
-    rerun = _read_optional_mapping(loop, "rerun", "config['loop']['rerun']")
+    loop = _read_optional_mapping(config, "loop", "config['loop']", "loop settings")
+    rerun = _read_optional_mapping(loop, "rerun", "config['loop']['rerun']", "stage name to true/false")
 
     unknown = [key for key in rerun if key not in LOOP_STAGES]
     if unknown:

@@ -263,6 +263,21 @@ def test_main_rejects_frozen_stage_fed_by_a_rerunning_stage(monkeypatch: pytest.
     assert not (tmp_path / "out" / "loop").exists()
 
 
+# reuse_output_dir is the actuation signal the driver writes into loop_overrides.yaml for iterations 2 and later, so a
+# run config carrying it would freeze stages already in iteration 1 and in plain forward passes. The driver must reject
+# it at startup, before any iteration tree is created.
+def test_main_rejects_reuse_output_dir_in_run_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, loop={"reuse_output_dir": f"{tmp_path}/reuse"})
+    monkeypatch.setattr(ouroboros, "_seed_iteration_inputs", lambda **kw: None)
+    monkeypatch.setattr(ouroboros, "run_forward_pass", lambda **kw: None)
+    monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path)])
+
+    with pytest.raises(ValueError, match="reuse_output_dir"):
+        ouroboros.main()
+
+    assert not (tmp_path / "out" / "loop").exists()
+
+
 # With every stage frozen no artifact can change between iterations, so the loop has nothing left to feed forward and
 # must stop after one forward pass however many iterations were asked for. The fake run writes a signal that is neither
 # a halt nor a convergence, so a second pass would follow if the all-frozen case did not cap the iteration count.
