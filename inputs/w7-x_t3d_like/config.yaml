@@ -35,9 +35,9 @@ convergence:
 # is frozen and loop iterations after the first reuse its iteration 1 output.
 loop:
   rerun:
-    stage1: true
-    stage2: true
-    stage3: true
+    stage1: false
+    stage2: false
+    stage3: false
     stage4: true
     stage5: true
 
