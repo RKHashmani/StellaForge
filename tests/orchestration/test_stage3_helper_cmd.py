@@ -5,14 +5,15 @@ config block into the three shell commands that the Snakefile's per-phase Stage 
 rules run. The exact strings are the contract with those rules, so this pins them:
 the static base flags (including the literal ``{input.*}`` and ``{wildcards.surf}``
 placeholders Snakemake substitutes at run time), the not-None-only optional flags
-on ``prepare``, the tri-state booleans, the gpu-only ``--gpu-ids`` flag on
-``run-one``, and the absence of scan-level parallelism flags now that surface
-concurrency belongs to ``snakemake --cores``.
+on ``prepare``, the tri-state booleans, and the absence of scan-level parallelism
+and GPU flags now that surface concurrency belongs to ``snakemake --cores`` and
+device assignment to the docker prefix.
 """
 
 from __future__ import annotations
 
 import argparse
+import inspect
 import re
 from collections.abc import Callable
 
@@ -29,8 +30,8 @@ _scan = load_stage_module(_STAGE3_SCRIPT)
 
 # Every prepare-phase optional key with a quick-run-like value, used both to exercise
 # each flag individually and to prove that a fully-populated config never leaks
-# scan-level parallelism flags. max_parallel is a retired key that older configs may
-# still carry; it must be ignored by every composer.
+# scan-level parallelism flags. max_parallel and gpu_ids are retired keys that older
+# configs may still carry; every composer must ignore them.
 _PREPARE_OPTIONALS: list[tuple[str, str, object]] = [
     ("profiles_source",    "--profiles-source",    "prescribed"),  # the loop's iteration-2+ value, not the default
     ("neopax_result",      "--neopax-result",      "outputs/quick_run/stage5_transport/transport_solution.h5"),
@@ -55,7 +56,11 @@ _FULL_CFG: dict = {key: value for key, _, value in _PREPARE_OPTIONALS} | {
 
 
 def compose(composer: Callable[..., str], **overrides) -> str:
-    """Build a command with quick-run-like defaults, overriding only what a test varies."""
+    """Build a command with quick-run-like defaults, overriding only what a test varies.
+
+    Each composer takes exactly the arguments its phase uses, so the shared defaults are narrowed to the ones the
+    called composer accepts.
+    """
     base = dict(
         docker_prefix="docker run --rm",
         image="ghcr.io/driftless-star/driftless-star:stage-3-sfincs-cpu",
@@ -64,7 +69,8 @@ def compose(composer: Callable[..., str], **overrides) -> str:
         device="cpu",
     )
     base.update(overrides)
-    return composer(**base)
+    accepted = inspect.signature(composer).parameters
+    return composer(**{name: value for name, value in base.items() if name in accepted})
 
 
 def parse_with_stage_script(command: str) -> argparse.Namespace:
@@ -148,13 +154,13 @@ def test_collect_plot_tristate() -> None:
     assert "--plot" not in absent and "--no-plot" not in absent
 
 
-# GPU pinning applies only to the worker phase: --gpu-ids appears only when the device is gpu AND the config sets
-# gpu_ids. A cpu device suppresses it even when gpu_ids is configured, and a gpu device without gpu_ids emits nothing.
-def test_run_one_gpu_ids_only_on_gpu() -> None:
-    cfg = {"gpu_ids": "0,1"}
-    assert "--gpu-ids 0,1" in compose(run_one_cmd, stage_cfg=cfg, device="gpu")
-    assert "--gpu-ids" not in compose(run_one_cmd, stage_cfg=cfg, device="cpu")
-    assert "--gpu-ids" not in compose(run_one_cmd, stage_cfg={}, device="gpu")
+# Device assignment lives in the docker run prefix, so the worker command itself carries no GPU flag in either mode
+# and the worker pins the one device its container exposes. The worker phase reads no stage config at all, so a
+# retired gpu_ids key left in a config file has no path to this command.
+def test_run_one_never_emits_gpu_ids() -> None:
+    assert "--gpu-ids" not in compose(run_one_cmd, device="gpu")
+    assert "--gpu-ids" not in compose(run_one_cmd, device="cpu")
+    assert "stage_cfg" not in inspect.signature(run_one_cmd).parameters
 
 
 # A drift guard. The exact-string tests only check the composer against itself; this checks it against the real stage
@@ -166,13 +172,15 @@ def test_prepare_flags_parse_and_dispatch_to_cmd_prepare() -> None:
     assert args.func.__name__ == "cmd_prepare"
 
 
-# A drift guard for the worker phase: the composed run-one command (gpu variant, so --gpu-ids is included) must parse
-# with the real stage script and dispatch to cmd_run_one, and the payload path must land on the run-one --payload
-# argument rather than on any flat-parser attribute.
+# A drift guard for the worker phase: the composed run-one command (gpu variant) must parse with the real stage script
+# and dispatch to cmd_run_one, and the payload path must land on the run-one --payload argument rather than on any
+# flat-parser attribute. gpu_ids staying at the parser's own "0" default proves the composer sent no id list, so the
+# worker pins device ordinal 0, the one device a pinned container exposes.
 def test_run_one_flags_parse_and_dispatch_to_cmd_run_one() -> None:
-    args = parse_with_stage_script(compose(run_one_cmd, stage_cfg=_FULL_CFG, device="gpu"))
+    args = parse_with_stage_script(compose(run_one_cmd, device="gpu"))
     assert args.func.__name__ == "cmd_run_one"
     assert args.payload == "outputs/quick_run/stage3_neoclassical/runs/rho_001_r0p1000/payload.json"
+    assert args.gpu_ids == "0"
 
 
 # A drift guard for the reduction phase. The flat (no-subcommand) parser defines its own --output-dir and --plot

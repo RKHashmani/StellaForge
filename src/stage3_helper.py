@@ -108,7 +108,6 @@ def run_one_cmd(
     *,
     docker_prefix: str,
     image: str,
-    stage_cfg: dict,
     output_dir: str,
     device: str,
 ) -> str:
@@ -120,12 +119,11 @@ def run_one_cmd(
         ``docker run ...`` prefix prepared by the Snakefile.
     image : str
         Container image for Stage 3 (e.g. ``ghcr.io/.../stage-3-sfincs-cpu``).
-    stage_cfg : dict
-        The ``config.yaml`` ``stage3.sfincs_jax`` block.
     output_dir : str
         Stage 3 output directory (already ``{run_name}``-substituted).
     device : str
-        ``"cpu"`` or ``"gpu"``; controls the JAX backend and GPU pinning.
+        ``"cpu"`` or ``"gpu"``; selects the worker's JAX backend. Device
+        assignment lives in ``docker_prefix``.
 
     Returns
     -------
@@ -140,8 +138,6 @@ def run_one_cmd(
         f"--payload {output_dir}/runs/{{wildcards.surf}}/payload.json",
         f"--backend {device}",
     ]
-    if device == "gpu" and stage_cfg.get("gpu_ids") is not None:
-        parts.append(f"--gpu-ids {stage_cfg['gpu_ids']}")
     return " ".join(parts)
 
 
@@ -151,7 +147,6 @@ def collect_cmd(
     image: str,
     stage_cfg: dict,
     output_dir: str,
-    device: str,
 ) -> str:
     """Compose the Stage 3 ``sfincs_jax`` ``collect`` shell command.
 
@@ -165,9 +160,6 @@ def collect_cmd(
         The ``config.yaml`` ``stage3.sfincs_jax`` block.
     output_dir : str
         Stage 3 output directory (already ``{run_name}``-substituted).
-    device : str
-        ``"cpu"`` or ``"gpu"``; accepted for a uniform composer signature and
-        not used by the reduction step.
 
     Returns
     -------

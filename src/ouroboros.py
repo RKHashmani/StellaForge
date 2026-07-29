@@ -11,6 +11,9 @@ The committed inputs under ``input_dir`` are only ever read, never modified.
 An optional ``loop.rerun`` block in the run config flags stages false to freeze them. When a stage is
 frozen the overrides file also carries the flag map and the iteration 1 tree, so the Snakefile reads that
 stage's artifacts from there. With every stage frozen the driver runs a single forward pass and stops.
+
+The ``--gpu-ids`` and ``--jobs-per-gpu`` flags override the run config's matching top-level keys for
+every iteration of one invocation, leaving the config file itself untouched.
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ from pathlib import Path
 
 import yaml
 
-from .utils import LOOP_STAGES, resolve_pipeline_paths, resolve_rerun_flags
+from .utils import LOOP_STAGES, resolve_gpu_settings, resolve_pipeline_paths, resolve_rerun_flags
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +167,7 @@ def run_forward_pass(
     config_path: Path,
     repo_root: Path,
     extra_configfiles: list[Path] | None = None,
+    extra_config: list[str] | None = None,
 ) -> None:
     """
     Run one Snakemake forward pass for an iteration.
@@ -173,6 +177,9 @@ def run_forward_pass(
     extra_configfiles : list[Path], optional
         Config files merged on top of ``config_path`` (e.g. the loop overrides that
         switch Stages 3/4 to prescribed profiles from iteration 2 on).
+    extra_config : list[str], optional
+        Further ``key=value`` entries for the ``--config`` group (e.g. the GPU pool
+        settings this invocation was given), taking precedence over every config file.
     """
     logger.info("Forward pass [%s]: snakemake %s --cores %d", output_dir, target, cores)
     # Extra config files are appended under the single --configfile flag. A second flag
@@ -180,7 +187,7 @@ def run_forward_pass(
     # take precedence in the deep merge, and --config key=value overrides apply last.
     cmd = ["snakemake", target, "--cores", str(cores), "--configfile", str(config_path)]
     cmd += [str(p) for p in (extra_configfiles or [])]
-    cmd += ["--config", f"input_dir={input_dir}", f"output_dir={output_dir}"]
+    cmd += ["--config", f"input_dir={input_dir}", f"output_dir={output_dir}", *(extra_config or [])]
     subprocess.run(cmd, cwd=repo_root, check=True)
 
 
@@ -194,6 +201,11 @@ def main() -> None:
                         help="Number of iterations (independent forward passes) to run (default: 3).")
     parser.add_argument("--cores", type=int, default=4,
                         help="Cores passed to 'snakemake --cores' (default: 4).")
+    parser.add_argument("--gpu-ids", type=str, default=None,
+                        help="Override the config's gpu_ids for every iteration (null, all, or a comma-separated "
+                             "id list).")
+    parser.add_argument("--jobs-per-gpu", type=int, default=None,
+                        help="Override the config's jobs_per_gpu for every iteration.")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -210,6 +222,23 @@ def main() -> None:
             "config['loop']['reuse_output_dir'] is written by the driver into each iteration's loop_overrides.yaml "
             "and must not appear in the run config, where it would freeze stages already in iteration 1."
         )
+
+    # Validates the effective GPU settings before any iteration tree is created. yaml.safe_load turns "null" into
+    # None and "4" into an integer, while "all" and "4,5" stay strings.
+    effective = dict(config)
+    if args.gpu_ids is not None:
+        effective["gpu_ids"] = yaml.safe_load(args.gpu_ids)
+    if args.jobs_per_gpu is not None:
+        effective["jobs_per_gpu"] = args.jobs_per_gpu
+    resolve_gpu_settings(effective)
+
+    # The flags are forwarded as raw text so snakemake re-parses each value exactly as a config file would.
+    gpu_overrides: list[str] = []
+    if args.gpu_ids is not None:
+        gpu_overrides.append(f"gpu_ids={args.gpu_ids}")
+    if args.jobs_per_gpu is not None:
+        gpu_overrides.append(f"jobs_per_gpu={args.jobs_per_gpu}")
+
     base_out = config["output_dir"]
     base_p = resolve_pipeline_paths(config)
 
@@ -245,7 +274,7 @@ def main() -> None:
         ]
         run_forward_pass(target=iter_p["s5_signal"], input_dir=iter_in, output_dir=iter_out,
                          cores=args.cores, config_path=config_path, repo_root=repo_root,
-                         extra_configfiles=extra_configfiles)
+                         extra_configfiles=extra_configfiles, extra_config=gpu_overrides or None)
 
         prev_p = iter_p  # post-processing wrote both feedback artifacts; they seed iteration n+1
         signal = json.loads(_abs(repo_root, iter_p["s5_signal"]).read_text())

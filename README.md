@@ -132,6 +132,34 @@ cp -r inputs/quick_run inputs/my_run
 pixi run -e pipeline snakemake --configfile inputs/my_run/config.yaml --cores 4
 ```
 
+### Run the closed loop
+
+The commands above are a single forward pass. To iterate toward transport-consistent profiles, the `ouroboros` driver sequences independent forward passes, feeding each pass's Stage 5 transport solution into the next one as a boundary refit from the evolved pressure and as kinetic profiles prescribed to Stages 3, 4, and 5:
+
+```
+pixi run -e pipeline ouroboros --config inputs/quick_run/config.yaml --max-iters 3 --cores 4
+```
+
+Each iteration is a full pipeline run under its own `outputs/<run>/loop/iter_N/` tree, and the driver stops early once the pressure profile settles within the config's `convergence.pressure_rel_tol`. Stages listed under `loop.rerun` as `false` are frozen, so iterations after the first reuse their iteration 1 artifacts. See [docs/mvp-pipeline.md](docs/mvp-pipeline.md#closing-the-loop).
+
+### Run on GPUs
+
+Two top-level run-config keys pick the `-gpu` image variant for every stage and the device pool its containers may use:
+
+```yaml
+gpu_ids: "4,5,6,7"   # null runs CPU images; "all" uses every GPU the execution host reports
+jobs_per_gpu: 2      # concurrent jobs allowed per GPU
+```
+
+Every concurrent job is pinned to one free slot of that pool, so the pool offers pool size times `jobs_per_gpu` slots and saturating it takes at least that many cores. Either key can be overridden per invocation, on a forward pass or on the loop:
+
+```
+pixi run -e pipeline snakemake --configfile inputs/quick_run/config.yaml --cores 8 --config gpu_ids=4,5,6,7 jobs_per_gpu=2
+pixi run -e pipeline ouroboros --config inputs/quick_run/config.yaml --cores 8 --gpu-ids 4,5,6,7 --jobs-per-gpu 2
+```
+
+GPU mode needs an NVIDIA host with `nvidia-container-toolkit` configured on the docker daemon. See [docs/mvp-pipeline.md](docs/mvp-pipeline.md#multi-gpu-scheduling) for how the pinning works, how to share a host with other users, and the current limitations.
+
 ### Visualize the pipeline graph
 
 Render the file-flow graph (files as nodes, rules as edges) **including the closed-loop post-processing step** by targeting the convergence signal file:
