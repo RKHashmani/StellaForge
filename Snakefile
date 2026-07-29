@@ -176,7 +176,6 @@ if RERUN["stage3"]:
             stage3_helper.run_one_cmd(
                 docker_prefix=DOCKER_PREFIX,
                 image=STAGE3_JAX_IMG,
-                stage_cfg=STAGE3_CFG,
                 output_dir=P["stage3_dir"],
                 device=DEVICE,
             ) + " 2>&1 | tee {log}"
@@ -205,7 +204,6 @@ if RERUN["stage3"]:
                 image=STAGE3_JAX_IMG,
                 stage_cfg=STAGE3_CFG,
                 output_dir=P["stage3_dir"],
-                device=DEVICE,
             ) + " 2>&1 | tee {log}"
 
 if RERUN["stage4"]:
@@ -225,7 +223,6 @@ if RERUN["stage4"]:
                 image=STAGE4_IMG,
                 stage_cfg=STAGE4_CFG,
                 output_dir=P["stage4_dir"],
-                device=DEVICE,
             ) + " 2>&1 | tee {log}"
 
     rule stage4_run_one:
@@ -274,7 +271,6 @@ if RERUN["stage4"]:
                 image=STAGE4_IMG,
                 stage_cfg=STAGE4_CFG,
                 output_dir=P["stage4_dir"],
-                device=DEVICE,
             ) + " 2>&1 | tee {log}"
 
 rule stage5_neopax:

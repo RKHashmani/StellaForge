@@ -13,6 +13,7 @@ device assignment to the docker prefix.
 from __future__ import annotations
 
 import argparse
+import inspect
 import re
 from collections.abc import Callable
 
@@ -55,7 +56,11 @@ _FULL_CFG: dict = {key: value for key, _, value in _PREPARE_OPTIONALS} | {
 
 
 def compose(composer: Callable[..., str], **overrides) -> str:
-    """Build a command with quick-run-like defaults, overriding only what a test varies."""
+    """Build a command with quick-run-like defaults, overriding only what a test varies.
+
+    Each composer takes exactly the arguments its phase uses, so the shared defaults are narrowed to the ones the
+    called composer accepts.
+    """
     base = dict(
         docker_prefix="docker run --rm",
         image="ghcr.io/driftless-star/driftless-star:stage-3-sfincs-cpu",
@@ -64,7 +69,8 @@ def compose(composer: Callable[..., str], **overrides) -> str:
         device="cpu",
     )
     base.update(overrides)
-    return composer(**base)
+    accepted = inspect.signature(composer).parameters
+    return composer(**{name: value for name, value in base.items() if name in accepted})
 
 
 def parse_with_stage_script(command: str) -> argparse.Namespace:
@@ -148,14 +154,13 @@ def test_collect_plot_tristate() -> None:
     assert "--plot" not in absent and "--no-plot" not in absent
 
 
-# Device assignment lives in the docker run prefix, so the worker command itself carries no GPU flag in either
-# mode. Even a config still holding the retired gpu_ids key must never make run-one emit --gpu-ids; the worker
-# then pins the one device its container exposes.
+# Device assignment lives in the docker run prefix, so the worker command itself carries no GPU flag in either mode
+# and the worker pins the one device its container exposes. The worker phase reads no stage config at all, so a
+# retired gpu_ids key left in a config file has no path to this command.
 def test_run_one_never_emits_gpu_ids() -> None:
-    cfg = {"gpu_ids": "0,1"}
-    assert "--gpu-ids" not in compose(run_one_cmd, stage_cfg=cfg, device="gpu")
-    assert "--gpu-ids" not in compose(run_one_cmd, stage_cfg=cfg, device="cpu")
-    assert "--gpu-ids" not in compose(run_one_cmd, stage_cfg={}, device="gpu")
+    assert "--gpu-ids" not in compose(run_one_cmd, device="gpu")
+    assert "--gpu-ids" not in compose(run_one_cmd, device="cpu")
+    assert "stage_cfg" not in inspect.signature(run_one_cmd).parameters
 
 
 # A drift guard. The exact-string tests only check the composer against itself; this checks it against the real stage
@@ -172,7 +177,7 @@ def test_prepare_flags_parse_and_dispatch_to_cmd_prepare() -> None:
 # flat-parser attribute. gpu_ids staying at the parser's own "0" default proves the composer sent no id list, so the
 # worker pins device ordinal 0, the one device a pinned container exposes.
 def test_run_one_flags_parse_and_dispatch_to_cmd_run_one() -> None:
-    args = parse_with_stage_script(compose(run_one_cmd, stage_cfg=_FULL_CFG, device="gpu"))
+    args = parse_with_stage_script(compose(run_one_cmd, device="gpu"))
     assert args.func.__name__ == "cmd_run_one"
     assert args.payload == "outputs/quick_run/stage3_neoclassical/runs/rho_001_r0p1000/payload.json"
     assert args.gpu_ids == "0"

@@ -15,6 +15,7 @@ to the docker prefix.
 from __future__ import annotations
 
 import argparse
+import inspect
 import re
 from collections.abc import Callable
 
@@ -69,7 +70,11 @@ _FULL_CFG: dict = {key: value for key, _, value in _PREPARE_OPTIONALS} | {
 
 
 def compose(composer: Callable[..., str], **overrides) -> str:
-    """Build a command with quick-run-like defaults, overriding only what a test varies."""
+    """Build a command with quick-run-like defaults, overriding only what a test varies.
+
+    Each composer takes exactly the arguments its phase uses, so the shared defaults are narrowed to the ones the
+    called composer accepts.
+    """
     base = dict(
         docker_prefix="docker run --rm",
         image="ghcr.io/driftless-star/driftless-star:stage-4-spectrax-cpu",
@@ -78,7 +83,8 @@ def compose(composer: Callable[..., str], **overrides) -> str:
         device="cpu",
     )
     base.update(overrides)
-    return composer(**base)
+    accepted = inspect.signature(composer).parameters
+    return composer(**{name: value for name, value in base.items() if name in accepted})
 
 
 def parse_with_stage_script(command: str) -> argparse.Namespace:

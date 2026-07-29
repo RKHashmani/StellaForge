@@ -71,7 +71,6 @@ def prepare_cmd(
     image: str,
     stage_cfg: dict,
     output_dir: str,
-    device: str,
 ) -> str:
     """Compose the Stage 4 SPECTRAX-GK ``prepare`` shell command.
 
@@ -90,10 +89,6 @@ def prepare_cmd(
         The ``config.yaml`` ``stage4.spectrax_gk`` block.
     output_dir : str
         Stage 4 output directory (already ``{run_name}``-substituted).
-    device : str
-        ``"cpu"`` or ``"gpu"``; accepted for a uniform composer signature. The
-        prepare step only writes the manifest and runtime TOMLs, and its parser
-        takes no backend flag, so no device flag is emitted.
 
     Returns
     -------
@@ -167,7 +162,6 @@ def collect_cmd(
     image: str,
     stage_cfg: dict,
     output_dir: str,
-    device: str,
 ) -> str:
     """Compose the Stage 4 SPECTRAX-GK ``collect`` shell command.
 
@@ -181,9 +175,6 @@ def collect_cmd(
         The ``config.yaml`` ``stage4.spectrax_gk`` block.
     output_dir : str
         Stage 4 output directory (already ``{run_name}``-substituted).
-    device : str
-        ``"cpu"`` or ``"gpu"``; accepted for a uniform composer signature and
-        not used by the reduction step.
 
     Returns
     -------
