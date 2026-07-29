@@ -125,7 +125,8 @@ def run_one_cmd(
     output_dir : str
         Stage 3 output directory (already ``{run_name}``-substituted).
     device : str
-        ``"cpu"`` or ``"gpu"``; controls the JAX backend and GPU pinning.
+        ``"cpu"`` or ``"gpu"``; selects the worker's JAX backend. Device
+        assignment lives in ``docker_prefix``.
 
     Returns
     -------
@@ -140,8 +141,6 @@ def run_one_cmd(
         f"--payload {output_dir}/runs/{{wildcards.surf}}/payload.json",
         f"--backend {device}",
     ]
-    if device == "gpu" and stage_cfg.get("gpu_ids") is not None:
-        parts.append(f"--gpu-ids {stage_cfg['gpu_ids']}")
     return " ".join(parts)
 
 

@@ -126,15 +126,14 @@ def test_loop_overrides_switch_stage_prepares_to_prescribed(tmp_path: Path) -> N
     assert "--profiles-source analytical" not in output, output
 
 
-# The Snakefile validates the `device` config at parse time, before any job runs. This dry-runs with `device=bogus` and
-# asserts the run fails (non-zero exit) with a message saying device must be 'cpu' or 'gpu', confirming a bad value is
-# caught early rather than deep into an execution.
-def test_invalid_device_fails_at_parse(tmp_path: Path) -> None:
-    result = _dry_run(tmp_path, targets=[], config_overrides=["device=bogus"])
+# The Snakefile validates the GPU pool config at parse time, before any job runs. The retired `device` key must be
+# rejected (non-zero exit) with a migration hint naming the gpu_ids replacement, confirming an out-of-date config is
+# caught early rather than silently planning a CPU run.
+def test_device_key_fails_at_parse_with_migration_hint(tmp_path: Path) -> None:
+    result = _dry_run(tmp_path, targets=[], config_overrides=["device=gpu"])
     output = result.stdout + result.stderr
     assert result.returncode != 0, output
-    # The Snakefile's parse-time device guard rejects anything but cpu/gpu.
-    assert "must be 'cpu' or 'gpu'" in output, output
+    assert "gpu_ids" in output, output
 
 
 # A perturbed fd_gradients sibling run-directory must be schedulable by stage4_run_one exactly like a baseline

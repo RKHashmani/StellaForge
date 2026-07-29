@@ -4,7 +4,7 @@ import json
 import posixpath
 
 from src import stage3_helper, stage4_helper, stage5_helper
-from src.utils import resolve_pipeline_paths, resolve_rerun_flags, RESOLVED_COMMON_CONFIG
+from src.utils import resolve_gpu_settings, resolve_pipeline_paths, resolve_rerun_flags, RESOLVED_COMMON_CONFIG
 
 # Require an explicit run config
 if not config:
@@ -18,11 +18,8 @@ if _missing:
 
 RUN_NAME = config["run_name"]
 
-DEVICE = config.get("device", "cpu")
-if DEVICE not in ("cpu", "gpu"):
-    raise ValueError(
-        f"config['device'] must be 'cpu' or 'gpu', got {DEVICE!r}."
-    )
+GPU = resolve_gpu_settings(config)
+DEVICE = GPU.device
 
 # Per-stage rerun flags for the closed loop, validated at parse time so a bad combination fails before any job runs.
 # Freezing a stage means reading its artifacts from an earlier pass, which takes an address from loop.reuse_output_dir.
@@ -39,7 +36,16 @@ elif not RERUN["stage5"]:
         "target. The loop driver runs a single iteration for an all-frozen config instead of naming a reuse tree."
     )
 
-GPU_FLAG       = "--gpus all " if DEVICE == "gpu" else ""
+# The slot allocator holds one flock slot for the container's lifetime and substitutes the acquired id into @GPU_ID@.
+GPU_FLAG = ""
+SLOT_PREFIX = ""
+if DEVICE == "gpu":
+    GPU_FLAG = "--gpus device=@GPU_ID@ "
+    SLOT_PREFIX = (
+        f"python -m src.gpu_slots --gpu-ids {','.join(GPU.pool) if GPU.pool else 'all'} "
+        f"--jobs-per-gpu {GPU.jobs_per_gpu} --lock-dir .snakemake/gpu_slots -- "
+    )
+
 STAGE1_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-1-vmec-{DEVICE}"
 STAGE2_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-2-booz-jax-{DEVICE}"
 STAGE3_JAX_IMG = f"ghcr.io/driftless-star/driftless-star:stage-3-sfincs-{DEVICE}"
@@ -49,7 +55,7 @@ STAGE5_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-5-neopax-{DEVICE}
 # --user: make bind-mounted writes host-owned (Linux docker otherwise writes as root).
 # -e HOME=/tmp: pixi activation needs a writable HOME after dropping root.
 DOCKER_PREFIX = (
-    f'docker run --rm --pull=missing {GPU_FLAG}'
+    f'{SLOT_PREFIX}docker run --rm --pull=missing {GPU_FLAG}'
     '--user "$(id -u):$(id -g)" '
     '-e HOME=/tmp '
     '-v "$PWD:/work" -w /work'
