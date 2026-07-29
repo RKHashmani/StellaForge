@@ -8,7 +8,7 @@ run_name: w7x_t3d_reconstruction
 # null: run every stage on CPU images with no GPU access.
 # "all": run GPU images, pinning each concurrent job to one free GPU of the execution host
 # ids e.g. "4,5,6,7": run GPU images with each concurrent job pinned to one free id from the pool.
-gpu_ids: null
+gpu_ids: "all"
 # Concurrent jobs allowed per GPU.
 jobs_per_gpu: 1
 
