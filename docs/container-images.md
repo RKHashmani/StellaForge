@@ -76,6 +76,12 @@ DRIVER version      : 590.48.01
 CUDA Version        : 13.1
 ```
 
+* Run the same container pinned to a single GPU, the form the pipeline's slot allocator emits for each job
+
+```console
+$ docker run --rm -ti --gpus device=4 ghcr.io/driftless-star/driftless-star:stage-1-vmec-gpu bash
+```
+
 ## Apptainer
 
 On Linux machines Apptainer can be installed from conda-forge with

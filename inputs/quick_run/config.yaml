@@ -4,8 +4,13 @@
 # Independent of the input_dir/output_dir folder name; describes the physics case.
 run_name: HSX_vacuum_ns201_quickrun
 
-# Container runtime device. One of: cpu, gpu.
-device: cpu
+# Container runtime GPU pool. One of:
+# null: run every stage on CPU images with no GPU access.
+# "all": run GPU images, pinning each concurrent job to one free GPU of the execution host
+# ids e.g. "4,5,6,7": run GPU images with each concurrent job pinned to one free id from the pool.
+gpu_ids: null
+# Concurrent jobs allowed per GPU.
+jobs_per_gpu: 1
 
 
 input_dir: inputs/quick_run
@@ -71,9 +76,6 @@ stage3:
     nx: 4
     solver_tolerance: 1.0e-6
 
-    # Used only when `device: gpu`.
-    gpu_ids: "0"
-
     # --- Toggles ---
     plot: true
     verbose_workers: true
@@ -125,9 +127,6 @@ stage4:
     # dkap_density: 0.5
     # dkap_temperature: 0.5
     # perturb_rel_step: 0.5
-
-    # Used only when `device: gpu`.
-    gpu_ids: "0"
 
     # --- Toggles ---
     plot: true

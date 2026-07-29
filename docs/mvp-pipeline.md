@@ -261,7 +261,7 @@ Automates the MVP forward pass end-to-end: `Stage 1 -> {Stage 2, Stage 3, Stage 
 
 | Direction | Format              | Location                                                                                                                                                           |
 | --------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **In**    | YAML config         | `inputs/quick_run/config.yaml` (keys: `run_name`, `device`, `input_dir`, `output_dir`, `filenames`, `convergence`, `loop`, `stage3`, `stage4`)                                            |
+| **In**    | YAML config         | `inputs/quick_run/config.yaml` (keys: `run_name`, `gpu_ids`, `jobs_per_gpu`, `input_dir`, `output_dir`, `filenames`, `convergence`, `loop`, `stage3`, `stage4`)    |
 | **In**    | Workflow definition | `Snakefile`                                                                                                                                                        |
 | **In**    | Per-stage inputs    | `inputs/quick_run/` (all stage inputs, flat)                                                                                                                       |
 | **Out**   | Stage 2 NetCDF      | `outputs/quick_run/stage2_boozer/boozmn_HSX_vacuum_ns201_quickrun.nc`                                                                                              |
@@ -275,7 +275,7 @@ Automates the MVP forward pass end-to-end: `Stage 1 -> {Stage 2, Stage 3, Stage 
 > `rule all` targets the Stage 5 transport solution (`transport_solution.h5`); all upstream artifacts (wout, boozmn, neoclassical + turbulent fluxes) are produced transitively because downstream rules declare them as `input:`. The loop-closing post-processing step is *not* part of `rule all` -- a plain `snakemake` stays a pure forward pass; see [Closing the Loop](#closing-the-loop).
 
 > [!NOTE]
-> Docker must be running on the host. On macOS / Windows that is Docker Desktop; on Linux, the docker engine or a rootless equivalent (podman aliased to `docker`). Windows users should invoke from WSL2 or Git Bash so bash expansions like `$PWD` resolve correctly inside the Snakefile's shell directives. HPC clusters that disallow Docker are a planned follow-up (Apptainer via `--sdm apptainer`).
+> Docker must be running on the host. On macOS / Windows that is Docker Desktop; on Linux, the docker engine or a rootless equivalent (podman aliased to `docker`). Windows users should invoke from WSL2 or Git Bash so bash expansions like `$PWD` resolve correctly inside the Snakefile's shell directives; GPU mode needs WSL2 specifically, since the slot allocator requires a POSIX host (see [Multi-GPU scheduling](#multi-gpu-scheduling)). HPC clusters that disallow Docker are a planned follow-up (Apptainer via `--sdm apptainer`).
 
 ### Per-surface fan-out (Stages 3 and 4)
 
@@ -340,7 +340,8 @@ rm -rf outputs/quick_run/                                                       
 Per-invocation overrides via `--config` (layered on top of the config file):
 
 ```
-pixi run -e pipeline snakemake --configfile inputs/quick_run/config.yaml --cores 4 --config device=gpu   # use -gpu images + --gpus all
+pixi run -e pipeline snakemake --configfile inputs/quick_run/config.yaml --cores 4 --config gpu_ids=all                    # use -gpu images, one job pinned per host GPU
+pixi run -e pipeline snakemake --configfile inputs/quick_run/config.yaml --cores 8 --config gpu_ids=4,5,6,7 jobs_per_gpu=2 # use -gpu images, pinning each job to one of 8 slots across GPUs 4-7
 ```
 
 Defining another run via its own config file:
@@ -352,10 +353,36 @@ pixi run -e pipeline snakemake --configfile inputs/my_run/config.yaml --cores 4
 Each run is self-contained: its `config.yaml` sets `input_dir`/`output_dir` and the input basenames, so there is no shared base file to inherit from. To change a few keys for one invocation without editing the file, append `--config key=value` (it overrides the file), or pass additional `--configfile` files (later files override earlier ones).
 
 > [!NOTE]
-> A run config is required: there is no hardcoded `configfile:` directive, so a bare `snakemake` errors with guidance to pass `--configfile`. Precedence (highest wins): `--config key=value` on the CLI → `--configfile` files (later override earlier) → in-code defaults via `config.get(...)`. `--config` is how `device` switches hardware per invocation without committing host-specific defaults.
+> A run config is required: there is no hardcoded `configfile:` directive, so a bare `snakemake` errors with guidance to pass `--configfile`. Precedence (highest wins): `--config key=value` on the CLI → `--configfile` files (later override earlier) → in-code defaults via `config.get(...)`. `--config` is how `gpu_ids` switches hardware per invocation without committing host-specific defaults.
 
 > [!NOTE]
-> `device=gpu` requires an NVIDIA host with `nvidia-container-toolkit` configured on the docker daemon.
+> Any non-null `gpu_ids` requires an NVIDIA host with `nvidia-container-toolkit` configured on the docker daemon. `gpu_ids: "all"` additionally needs `nvidia-smi` on the execution host, which the NVIDIA driver already provides.
+
+### Multi-GPU scheduling
+
+Two top-level run-config keys decide which image variant every stage runs and which devices its containers may use:
+
+```yaml
+# Container runtime GPU pool. One of:
+# null: run every stage on CPU images with no GPU access.
+# "all": run GPU images, pinning each concurrent job to one free GPU of the execution host
+# ids e.g. "4,5,6,7": run GPU images with each concurrent job pinned to one free id from the pool.
+gpu_ids: null
+# Concurrent jobs allowed per GPU.
+jobs_per_gpu: 1
+```
+
+**How pinning works.** In GPU mode every job's `docker run` is wrapped by the slot allocator (`python -m src.gpu_slots ... -- docker run --gpus device=@GPU_ID@ ...`). An explicit id list is passed through as written; `gpu_ids: "all"` is resolved by the wrapper on the execution host when the job starts, taking the ids `CUDA_VISIBLE_DEVICES` lists when that variable is set (exporting it is the supported way to restrict `"all"` on a shared host) and every GPU `nvidia-smi` reports otherwise. The wrapper takes an exclusive `flock` on one lock file per slot under `.snakemake/gpu_slots/` (relative to the invocation directory, i.e. the repo root), substitutes the acquired id into the command's `@GPU_ID@` token, and holds the lock for the container's whole lifetime. The kernel drops a `flock` when the holding process exits for any reason, so a crashed or cancelled job frees its slot with no stale-lock cleanup. Each job logs `[gpu_slots] acquired GPU <id>`, and a job that finds every slot taken logs one `[gpu_slots] waiting for a free GPU slot` line before it blocks, because a rule's `2>&1 | tee {log}` pipe covers the wrapper as well as the container.
+
+**Enforcement boundary.** Every pipeline job is wrapped, the single-job Stages 1, 2, and 5 and the Stage 3/4 `prepare` and `collect` phases included, so no pipeline container can reach a device outside the pool, and every container sees exactly one GPU regardless of mode.
+
+**Concurrency.** Job concurrency is still `snakemake --cores`, one job per surface (see [Per-surface fan-out](#per-surface-fan-out-stages-3-and-4)). The pool offers pool size times `jobs_per_gpu` slots, so saturating it takes at least that many cores. Asking for more cores than slots is safe, since the surplus jobs block on the flock and log the waiting line until a slot frees up.
+
+**Sharing a device.** Raising `jobs_per_gpu` is deliberate oversubscription and requires `gpu_ids` to name GPUs (`"all"` or an id list), so several JAX containers then share one device. The per-surface workers disable JAX VRAM preallocation, but co-located jobs can still exhaust a device's memory, which makes the count something to size against how much VRAM one surface needs. Both keys are validated by `resolve_gpu_settings` (`src/utils/gpu.py`) at Snakefile parse time and again at driver startup, so an unusable pool fails before any job runs; a config still carrying the removed `device` key fails the same way, with a migration hint.
+
+**On the command line.** `--config gpu_ids=4,5,6,7 jobs_per_gpu=2` overrides the file for one invocation, and CPU mode is either `gpu_ids=null` or an empty `gpu_ids=`. Snakemake parses the CLI value itself, and the validator accepts both the `"null"` string and `None` that this produces. The [closed-loop driver](#closing-the-loop) takes the same two settings as `--gpu-ids` / `--jobs-per-gpu`.
+
+**Limitations.** Concurrent pipeline invocations share slot accounting only when they are launched from the same working copy, since the lock files live under that copy's `.snakemake/gpu_slots/`, and only when they agree on `jobs_per_gpu`. Two users running from their own copies therefore allocate independently, and under `gpu_ids: "all"` both pools resolve to every GPU of the host, so each device runs twice the jobs asked for while both runs' `[gpu_slots] acquired` lines still report one job per device. Give each user a disjoint `CUDA_VISIBLE_DEVICES` share so their pools cannot overlap. The slot allocator also needs a POSIX host, since `fcntl.flock` has no Windows implementation, so GPU mode requires WSL2 rather than Git Bash; CPU mode wraps no job and is unaffected. Runtime Apptainer support is a planned follow-up; its per-device mechanism would be the `CUDA_VISIBLE_DEVICES` environment variable, since `apptainer --nv` has no per-device flag.
 
 ### Visualizing the file-flow graph
 
@@ -418,6 +445,8 @@ pixi run -e pipeline ouroboros --max-iters 3 --cores 4
 | `--config`    | `inputs/quick_run/config.yaml` | Pipeline run config file.               |
 | `--max-iters` | `3`           | Number of iterations (independent forward passes).   |
 | `--cores`     | `4`           | Cores passed to `snakemake --cores`.                 |
+| `--gpu-ids`   | the config's `gpu_ids` | Forwarded to every iteration's `snakemake --config` (see [Multi-GPU scheduling](#multi-gpu-scheduling)). |
+| `--jobs-per-gpu` | the config's `jobs_per_gpu` | Forwarded to every iteration's `snakemake --config`. |
 
 > [!NOTE]
 > Each iteration is a full forward pass, so Docker must be running and all stage images must be available (the loop exercises `stage-1-vmec` through `stage-5-neopax`; the post-processing step reuses the Stage 5 image). The driver runs on the orchestration `pipeline` env, like Snakemake itself.

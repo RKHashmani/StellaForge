@@ -248,6 +248,7 @@ When a stage completes Phase 2 (containerized, tested, and producing valid outpu
 - The forward-pass Stage 3 (`sfincs_jax`) reads only the Stage 1 wout, so it runs in parallel with Stage 2; Stage 4 (`SPECTRAX-GK`) also needs the Stage 2 boozmn, so it follows Stage 2.
 - `NEO_JAX` reads the Stage 2 boozmn and runs alongside `sfincs_jax` as a screening diagnostic, but it has **no Snakemake rule** and is not part of the forward pass. Its epsilon_eff is a screening metric only. It should not be wired as a dependency for Stage 5.
 - Stages 3 and 4 each fan out one Snakemake job per flux surface via a three-rule `prepare` (checkpoint) / `run_one` / `collect` layout; see [Per-surface fan-out](mvp-pipeline.md#per-surface-fan-out-stages-3-and-4).
+- On GPU hosts every job is pinned to one device from a user-supplied pool (or every host GPU via `gpu_ids: "all"`), so no pipeline container reaches a device outside it; see [Multi-GPU scheduling](mvp-pipeline.md#multi-gpu-scheduling).
 
 ### Config-Driven Selection
 
