@@ -41,5 +41,3 @@
 - [ ] Container registry for external collaborators: where do external contributors host their alternative stage implementations? Maybe their own GHCR or Docker Hub, with the workflow engine pulling from there.
 - [ ] How to expose the workflow engine to external users.
 - [ ] How to validate that externally submitted containers are not a security threat.
-- [ ] Parallelization strategy: when a stage's internal loop can be parallelized across threads or compute nodes, should Snakemake handle the distribution or should the stage software manage it internally?
-	- [ ] Consider an intermediate orchestration layer between Snakemake and the stage software that handles parallelization.
