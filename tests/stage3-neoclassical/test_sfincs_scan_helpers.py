@@ -110,6 +110,80 @@ def test_snapshot_species_density_ratios(module: ModuleType) -> None:
     assert_allclose(snap.density[2], 0.4 * snap.density[0], rtol=1e-12)
 
 
+def _w7x_like_profiles() -> dict:
+    """A 2-species [profiles] block in the per-species-array form used by inputs/w7-x_t3d_like."""
+    return {
+        "geometry": {"n_radial": 5, "rho_edge": 0.7},
+        "profiles": {
+            "model": "standard_analytical",
+            "n0": [0.35, 0.35],
+            "n_edge": [0.29, 0.29],
+            "T0": [6.7, 1.0],
+            "T_edge": [0.8, 0.8],
+            "density_shape_power": [2.0, 2.0],
+            "temperature_shape_power": [2.0, 2.0],
+            "temperature_shape_alpha": [2.0, 1.0],
+            "er0_scale": 0.0,
+            "er0_peak_rho": 0.8,
+        },
+    }
+
+
+# Every scalar [profiles] knob is equally accepted as a per-species list. T0 = [6.7, 1.0] with a shared
+# T_edge = 0.8 gives each species its own core temperature meeting at a common edge value, so this asserts the
+# electron and ion columns start at 6.7 and 1.0 respectively and both end at 0.8.
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+def test_snapshot_accepts_per_species_arrays(module: ModuleType) -> None:
+    snap = module._build_standard_analytical_snapshot(_w7x_like_profiles(), n_species=2, n_radial=5)
+    assert_allclose(snap.temperature[0, 0], 6.7, rtol=1e-12)  # electron core T0
+    assert_allclose(snap.temperature[1, 0], 1.0, rtol=1e-12)  # ion core T0
+    assert_allclose(snap.temperature[:, -1], 0.8, rtol=1e-12)  # shared T_edge
+    assert_allclose(snap.density[:, 0], 0.35, rtol=1e-12)
+    assert_allclose(snap.density[:, -1], 0.29, rtol=1e-12)
+
+
+# temperature_shape_alpha is the outer exponent in edge + (core - edge) * (1 - x**power)**alpha. With
+# alpha = [2.0, 1.0] and equal powers, this asserts each species matches its own analytical curve and that the two
+# normalised shapes come out different.
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+def test_snapshot_applies_shape_alpha(module: ModuleType) -> None:
+    snap = module._build_standard_analytical_snapshot(_w7x_like_profiles(), n_species=2, n_radial=5)
+    x = np.linspace(0.0, 1.0, 5)
+    for i, (t0, alpha) in enumerate([(6.7, 2.0), (1.0, 1.0)]):
+        expected = 0.8 + (t0 - 0.8) * (1.0 - x**2.0) ** alpha
+        assert_allclose(snap.temperature[i], expected, rtol=1e-12)
+    # Normalised shapes differ between the two species.
+    shape_e = (snap.temperature[0] - 0.8) / (6.7 - 0.8)
+    shape_i = (snap.temperature[1] - 0.8) / (1.0 - 0.8)
+    assert not np.allclose(shape_e, shape_i)
+
+
+# [geometry].rho_edge sets the extent of the radial grid. With rho_edge = 0.7 this asserts the snapshot's rho is
+# linspace(0, 0.7, n) rather than always reaching 1.0; the shape functions are evaluated on x = rho / rho_edge.
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+def test_snapshot_grid_honours_rho_edge(module: ModuleType) -> None:
+    snap = module._build_standard_analytical_snapshot(_w7x_like_profiles(), n_species=2, n_radial=5)
+    assert_allclose(snap.rho, np.linspace(0.0, 0.7, 5), rtol=1e-12)
+
+
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+def test_snapshot_grid_defaults_rho_edge(module: ModuleType) -> None:
+    cfg = _w7x_like_profiles()
+    del cfg["geometry"]["rho_edge"]
+    snap = module._build_standard_analytical_snapshot(cfg, n_species=2, n_radial=5)
+    assert_allclose(snap.rho, np.linspace(0.0, 1.0, 5), rtol=1e-12)
+
+
+# The radial electric field is the parabola er0_scale * x * (er0_peak_rho - x) in normalised x. It crosses zero at
+# x = er0_peak_rho, so this also asserts the outermost point (x = 1 > 0.8) comes out negative.
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+def test_snapshot_er_is_neopax_parabola(module: ModuleType) -> None:
+    snap = module._build_standard_analytical_snapshot(_w7x_like_profiles(), n_species=2, n_radial=5)
+    x = np.linspace(0.0, 1.0, 5)
+    assert_allclose(snap.er, 100.0 * x * (0.8 - x), rtol=1e-12)
+    assert snap.er[-1] < 0.0  # x = 1 > er0_peak_rho = 0.8
+
+
 # --- _build_prescribed_snapshot ---
 
 # Both stage scripts also carry a _build_prescribed_snapshot twin that reads the closed loop's fed-back [profiles]
