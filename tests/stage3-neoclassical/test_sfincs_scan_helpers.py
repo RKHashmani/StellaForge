@@ -123,7 +123,7 @@ def _w7x_like_profiles() -> dict:
             "density_shape_power": [2.0, 2.0],
             "temperature_shape_power": [2.0, 2.0],
             "temperature_shape_alpha": [2.0, 1.0],
-            "er0_scale": 100.0,
+            "er0_scale": 0.0,
             "er0_peak_rho": 0.8,
         },
     }
