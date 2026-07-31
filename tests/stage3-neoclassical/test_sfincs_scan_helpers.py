@@ -175,13 +175,24 @@ def test_snapshot_grid_defaults_rho_edge(module: ModuleType) -> None:
 
 
 # The radial electric field is the parabola er0_scale * x * (er0_peak_rho - x) in normalised x. It crosses zero at
-# x = er0_peak_rho, so this also asserts the outermost point (x = 1 > 0.8) comes out negative.
+# x = er0_peak_rho, so this also asserts the outermost point (x = 1 > 0.8) comes out negative. The shared fixture pins
+# er0_scale = 0.0, so a non-zero scale is set here.
 @pytest.mark.parametrize("module", SNAPSHOT_MODULES)
 def test_snapshot_er_is_neopax_parabola(module: ModuleType) -> None:
-    snap = module._build_standard_analytical_snapshot(_w7x_like_profiles(), n_species=2, n_radial=5)
+    cfg = _w7x_like_profiles()
+    cfg["profiles"]["er0_scale"] = 100.0
+    snap = module._build_standard_analytical_snapshot(cfg, n_species=2, n_radial=5)
     x = np.linspace(0.0, 1.0, 5)
     assert_allclose(snap.er, 100.0 * x * (0.8 - x), rtol=1e-12)
     assert snap.er[-1] < 0.0  # x = 1 > er0_peak_rho = 0.8
+
+
+# The T3D reference case runs with no radial electric field, so the fixture's er0_scale = 0.0 must flatten the parabola
+# to exactly zero at every radius. atol = 0.0 pins exact zeros rather than merely small values.
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+def test_snapshot_er_is_zero_when_scale_is_zero(module: ModuleType) -> None:
+    snap = module._build_standard_analytical_snapshot(_w7x_like_profiles(), n_species=2, n_radial=5)
+    assert_allclose(snap.er, np.zeros(5), atol=0.0)
 
 
 # --- _build_prescribed_snapshot ---
