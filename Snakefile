@@ -4,7 +4,13 @@ import json
 import posixpath
 
 from src import stage3_helper, stage4_helper, stage5_helper
-from src.utils import resolve_gpu_settings, resolve_pipeline_paths, resolve_rerun_flags, RESOLVED_COMMON_CONFIG
+from src.utils import (
+    resolve_docker_user,
+    resolve_gpu_settings,
+    resolve_pipeline_paths,
+    resolve_rerun_flags,
+    RESOLVED_COMMON_CONFIG,
+)
 
 # Require an explicit run config
 if not config:
@@ -52,11 +58,11 @@ STAGE3_JAX_IMG = f"ghcr.io/driftless-star/driftless-star:stage-3-sfincs-{DEVICE}
 STAGE4_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-4-spectrax-{DEVICE}"
 STAGE5_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-5-neopax-{DEVICE}"
 
-# --user: make bind-mounted writes host-owned (Linux docker otherwise writes as root).
+# --user: detects the daemon and runs as the invoking user on rootful Docker, so bind-mounted writes stay host-owned.
 # -e HOME=/tmp: pixi activation needs a writable HOME after dropping root.
 DOCKER_PREFIX = (
     f'{SLOT_PREFIX}docker run --rm --pull=missing {GPU_FLAG}'
-    '--user "$(id -u):$(id -g)" '
+    f'{resolve_docker_user(config)}'
     '-e HOME=/tmp '
     '-v "$PWD:/work" -w /work'
 )
