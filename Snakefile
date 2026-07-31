@@ -58,7 +58,7 @@ STAGE3_JAX_IMG = f"ghcr.io/driftless-star/driftless-star:stage-3-sfincs-{DEVICE}
 STAGE4_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-4-spectrax-{DEVICE}"
 STAGE5_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-5-neopax-{DEVICE}"
 
-# --user: detects the daemon and runs as the invoking user on rootful Docker, so bind-mounted writes stay host-owned.
+# --user: detects the runtime and picks the uid whose writes land host-owned, the invoking user or container root.
 # -e HOME=/tmp: pixi activation needs a writable HOME after dropping root.
 DOCKER_PREFIX = (
     f'{SLOT_PREFIX}docker run --rm --pull=missing {GPU_FLAG}'

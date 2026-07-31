@@ -384,7 +384,7 @@ jobs_per_gpu: 1
 
 **Limitations.** Concurrent pipeline invocations share slot accounting only when they are launched from the same working copy, since the lock files live under that copy's `.snakemake/gpu_slots/`, and only when they agree on `jobs_per_gpu`. Two users running from their own copies therefore allocate independently, and under `gpu_ids: "all"` both pools resolve to every GPU of the host, so each device runs twice the jobs asked for while both runs' `[gpu_slots] acquired` lines still report one job per device. Give each user a disjoint `CUDA_VISIBLE_DEVICES` share so their pools cannot overlap. The slot allocator also needs a POSIX host, since `fcntl.flock` has no Windows implementation, so GPU mode requires WSL2 rather than Git Bash; CPU mode wraps no job and is unaffected. Runtime Apptainer support is a planned follow-up; its per-device mechanism would be the `CUDA_VISIBLE_DEVICES` environment variable, since `apptainer --nv` has no per-device flag.
 
-### Container user (rootful vs rootless Docker)
+### Container user (rootful and rootless runtimes)
 
 Every stage's `docker run` bind-mounts the repo at `/work`, so the container's user decides who owns the files a stage writes back into your working tree. The optional top-level `docker_user` key selects that user:
 
@@ -393,12 +393,16 @@ docker_user: auto   # auto (default) | host | root
 ```
 
 - **`host`** adds `--user "$(id -u):$(id -g)"`, so a container writes as you instead of as root. This is what a **rootful** daemon needs.
-- **`root`** omits the flag and leaves the image's own user (root) in place. This is what a **rootless** daemon needs: it already maps your host user onto the container's root, so it gives you host-owned outputs for free, and passing `--user` anyway drops the container to an unprivileged subuid that cannot read `/work` at all. The stage then fails on its own inputs, typically reporting a misleading "file not found" for a file that is plainly there.
-- **`auto`** (the default) reads `docker info` once at parse time and picks `root` for a rootless daemon and `host` otherwise. Because the daemon is a property of the execution host rather than of a run, committed run configs carry no `docker_user` key and work on both. If Docker cannot be reached at all, say a dry run on a machine with no Docker, `auto` falls back to `host` rather than failing.
+- **`root`** adds `--user 0:0`, so the container runs as container root. This is what a **rootless** runtime needs, because it already maps your host user onto container uid 0 and hands you host-owned outputs for free. Passing the host uid there instead drops the container to an unprivileged subuid that cannot read `/work` at all, and the stage then fails on its own inputs, typically reporting a misleading "file not found" for a file that is plainly there. Naming uid 0 rather than omitting the flag keeps the resolved user the same if a stage image ever declares its own `USER`.
+- **`auto`** (the default) reads one `docker info` document at parse time and picks `root` for a rootless runtime and `host` otherwise. It understands both Docker, which reports the mapping in `SecurityOptions`, and Podman, which reports it under `host.security.rootless`, so a rootless podman aliased to `docker` resolves correctly. Because the runtime is a property of the execution host rather than of a run, committed run configs carry no `docker_user` key and work on both. If the runtime cannot be reached at all, say a dry run on a machine with no Docker, `auto` falls back to `host` rather than failing.
 
-Pin a mode only when you know the host. Setting `root` on a **rootful** daemon runs the container as real host root over the bind-mounted repo, so a stage can write root-owned files or overwrite paths your own account could not. `auto` never selects that combination, since it resolves to `root` only when the daemon reports itself rootless.
+Pin a mode only when you know the host. Setting `root` on a **rootful** daemon runs the container as real host root over the bind-mounted repo, so a stage can write root-owned files or overwrite paths your own account could not. `auto` never selects that combination, since it resolves to `root` only when the runtime reports itself rootless. Inspect your own with `docker info --format '{{json .}}'`.
 
-Override it per invocation with `--config docker_user=root`. The value is validated by `resolve_docker_user` (`src/utils/docker.py`) at Snakefile parse time, so a typo fails before any job runs. Check which daemon you have with `docker info -f '{{.SecurityOptions}}'`; a rootless one lists `name=rootless`.
+**Unsupported: rootful Docker with [user-namespace remapping](https://docs.docker.com/engine/security/userns-remap/).** That mode maps container uids onto subordinate host uids, so neither container root nor your own uid owns the bind mount and no automatic choice is correct. `auto` detects it and fails at parse time rather than planning a run whose outputs nobody can read. Pin `host` or `root` to proceed and accept the ownership that follows.
+
+Detection describes the machine that runs `snakemake`, not any machine that later runs a job. That matches the current local execution model; a future cluster executor dispatching to remote hosts would need the mode pinned per run instead.
+
+Override it per invocation with `--config docker_user=root`. The value is validated by `resolve_docker_user` (`src/utils/docker.py`) at Snakefile parse time, so a typo fails before any job runs.
 
 ### Visualizing the file-flow graph
 
