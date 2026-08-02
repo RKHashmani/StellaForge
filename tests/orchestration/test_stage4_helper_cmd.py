@@ -21,7 +21,14 @@ from collections.abc import Callable
 
 import pytest
 
-from src.stage4_helper import collect_cmd, prepare_cmd, run_one_cmd
+from src.stage4_helper import (
+    RELABEL_CONVENTIONS,
+    collect_cmd,
+    prepare_cmd,
+    relabel_cmd,
+    resolve_radius_relabel,
+    run_one_cmd,
+)
 from tests.helpers.stage_import import load_stage_module
 
 _STAGE4_SCRIPT = "stages/stage4-turbulence/spectrax_gk_radial_scan.py"
@@ -244,3 +251,78 @@ def test_no_composer_emits_scan_level_flags() -> None:
             out = compose(composer, stage_cfg=_FULL_CFG, device=device)
             assert "--max-parallel" not in out
             assert "--collect-even-if-failures" not in out
+
+
+# --- the NEOPAX radial-grid relabelling step ---
+
+_RELABEL_SCRIPT = "stages/stage4-turbulence/relabel_neopax_flux_radius.py"
+_relabel = load_stage_module(_RELABEL_SCRIPT)
+
+_RELABEL_ARGS = dict(
+    flux_file="outputs/quick_run/stage4_turbulence/neopax_fluxes.h5",
+    wout="outputs/quick_run/stage1_equilibrium/wout_run.nc",
+    boozer="outputs/quick_run/stage2_boozer/boozmn_run.nc",
+    convention="boozer_volume",
+    rho_edge=0.7,
+)
+
+
+# An absent key and an explicit false both leave the flux file's grid alone. There is no boolean spelling of "on",
+# since the convention has to be named, so a config can never enable the step without saying which grid it targets.
+@pytest.mark.parametrize("cfg", [{}, {"stage4": {}}, {"stage4": {"neopax_radius_relabel": False}}])
+def test_radius_relabel_off_by_default(cfg: dict) -> None:
+    assert resolve_radius_relabel(cfg) is None
+
+
+@pytest.mark.parametrize("convention", RELABEL_CONVENTIONS)
+def test_radius_relabel_accepts_each_convention(convention: str) -> None:
+    assert resolve_radius_relabel({"stage4": {"neopax_radius_relabel": convention}}) == convention
+
+
+# The convention names live in two places, since a stage script runs inside its container and never imports `src`.
+# A name added on one side only would be accepted by config and then rejected by argparse inside the container.
+def test_the_config_conventions_match_the_script_conventions() -> None:
+    assert RELABEL_CONVENTIONS == _relabel.CONVENTIONS
+
+
+# True is rejected rather than mapped onto a default convention, because the key is a name precisely so that
+# NEOPAX's choice of minor radius, the thing that might change, has to be stated by the config.
+@pytest.mark.parametrize("bad", [True, "true", "yes", "boozer", "vmec_aminor", 1, None])
+def test_radius_relabel_rejects_anything_that_is_not_a_convention(bad: object) -> None:
+    with pytest.raises(ValueError, match="neopax_radius_relabel"):
+        resolve_radius_relabel({"stage4": {"neopax_radius_relabel": bad}})
+
+
+def test_relabel_base_command() -> None:
+    assert compose(relabel_cmd, **_RELABEL_ARGS) == (
+        "docker run --rm ghcr.io/driftless-star/driftless-star:stage-4-spectrax-cpu "
+        "python stages/stage4-turbulence/relabel_neopax_flux_radius.py "
+        "--flux-file outputs/quick_run/stage4_turbulence/neopax_fluxes.h5 "
+        "--wout outputs/quick_run/stage1_equilibrium/wout_run.nc "
+        "--boozer outputs/quick_run/stage2_boozer/boozmn_run.nc "
+        "--convention boozer_volume "
+        "--rho-edge 0.7"
+    )
+
+
+# The same drift guard the other phases get: the composed command is fed to the relabel script's own parser, so a
+# renamed or dropped flag fails here rather than inside the container. rho_edge in particular has to survive as a
+# number, since it is read from the NEOPAX template rather than from config.yaml.
+def test_relabel_flags_parse_with_the_stage_script() -> None:
+    command = compose(relabel_cmd, **_RELABEL_ARGS)
+    argv = command.split()[command.split().index(_RELABEL_SCRIPT) + 1:]
+    try:
+        args = _relabel.build_parser().parse_args(argv)
+    except SystemExit as exc:
+        pytest.fail(f"relabel script parser rejected a composer-emitted flag: argv={argv} (exit {exc.code})")
+    assert args.convention == "boozer_volume"
+    assert args.rho_edge == 0.7
+    assert args.dry_run is False
+
+
+# Rewriting one HDF5 dataset needs no GPU, so the Snakefile hands this composer the slot-free prefix. Nothing in the
+# composer itself may add a device flag back.
+def test_relabel_command_carries_no_gpu_flag() -> None:
+    out = compose(relabel_cmd, **_RELABEL_ARGS)
+    assert "--gpus" not in out
+    assert "gpu_slots" not in out
