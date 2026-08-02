@@ -19,6 +19,11 @@ entropy_model = "none"
 [turbulence]
 flux_model = "fluxes_r_file"
 turbulence_file = "../../outputs/w7-x_quick_run/stage4_turbulence/neopax_fluxes.h5"
+# Build the turbulent flux response from the perturbed datasets Stage 4 writes under
+# response_mode = "fd_gradients". Options include:
+# "none": read the base fluxes only, leaving the perturbed datasets unused
+# "fd": finite-difference lagged response anchored on the file's base fluxes
+lagged_response_mode = "fd"
 
 [classical]
 flux_model = "none"
