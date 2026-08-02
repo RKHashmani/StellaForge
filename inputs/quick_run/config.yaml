@@ -132,3 +132,15 @@ stage4:
     plot: true
     plot_run_heat_traces: true
     verbose_workers: true
+
+  # Rewrite the collected flux file's `r` grid onto the minor-radius convention Stage 5 builds its
+  # own radial grid on. Stage 4 writes `r = Aminor_p * rho` from VMEC, and NEOPAX derives its minor
+  # radius differently, so the two grids disagree by up to ~1%. Where NEOPAX's grid is the wider one
+  # its outermost cell falls off the end of the flux file and interpolates to NaN; a
+  # `[turbulence] lagged_response_mode = "fd"` run needs the two grids equal to 1e-12 either way.
+  # This case is HSX, whose skew leans the other way (-1.04%), so nothing here would crash with the
+  # step off; it would just read the fluxes at radii off by that much.
+  # Options include:
+  # false: write the grid through unchanged
+  # "boozer_volume": sqrt(volume_p / (2 pi^2 R00_boozer)), what NEOPAX builds today
+  neopax_radius_relabel: "boozer_volume"

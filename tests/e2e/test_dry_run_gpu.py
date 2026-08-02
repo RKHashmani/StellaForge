@@ -5,12 +5,15 @@ command without starting a container, so the three modes can be told apart from 
 planned text alone on a machine with no GPU and no Docker.
 
 What is pinned here is the boundary between the modes. A cpu run must plan no device
-flag at all, while both GPU modes must route every single container launch through the
-allocator, because one unwrapped launch would take a device the allocator believes is
-free. The two GPU modes differ only in where the pool comes from. An explicit list is
-planned as ids, and "all" is planned as the word itself, since the host's own ids are
-resolved by the allocator when the job starts. The malformed cases pin that the pool is
-resolved at parse time, so a typo costs nothing rather than failing hours into a run.
+flag at all, while both GPU modes must route every device-taking container launch
+through the allocator, because one unwrapped launch would take a device the allocator
+believes is free. Steps that only rewrite a file are planned with neither a device nor
+the allocator and are counted out, since the guarantee is that no launch reaches a
+device unallocated rather than that every launch takes one. The two GPU modes differ
+only in where the pool comes from. An explicit list is planned as ids, and "all" is
+planned as the word itself, since the host's own ids are resolved by the allocator when
+the job starts. The malformed cases pin that the pool is resolved at parse time, so a
+typo costs nothing rather than failing hours into a run.
 
 The ``_dry_run`` helper is shared with the DAG tests, which documents the isolation it
 applies to keep every write under tmp.
@@ -28,6 +31,17 @@ from tests.e2e.test_dry_run_dag import _dry_run
 # that uses it overrides only gpu_ids and the committed config sets that key to 1.
 SLOT_PREFIX = "python -m src.gpu_slots --gpu-ids 4,5 --jobs-per-gpu 2 --lock-dir .snakemake/gpu_slots -- "
 ALL_SLOT_PREFIX = "python -m src.gpu_slots --gpu-ids all --jobs-per-gpu 1 --lock-dir .snakemake/gpu_slots -- "
+
+# Scripts that only rewrite a file, so they are planned without a device and without the allocator and are counted
+# out of the every-launch-is-wrapped totals below. The guarantee is that no launch reaches a device unallocated,
+# not that every launch takes one.
+DEVICE_FREE_SCRIPTS = ("relabel_neopax_flux_radius.py",)
+
+
+def _launch_counts(output: str) -> tuple[int, int, int]:
+    """Return (launches taking a device, allocator invocations, launches planned without a device)."""
+    device_free = sum(output.count(script) for script in DEVICE_FREE_SCRIPTS)
+    return output.count("docker run") - device_free, output.count("src.gpu_slots"), device_free
 
 
 # The committed config runs on cpu, so the default plan must carry no device flag and no allocator, and must select the
@@ -54,8 +68,12 @@ def test_all_plans_wrapped_containers_pinned_to_one_device(tmp_path: Path) -> No
     assert "--gpus device=@GPU_ID@" in output, output
     assert "stage-1-vmec-gpu" in output, output
     assert "--gpus all" not in output, output
-    assert output.count("docker run") > 0, output
-    assert output.count("docker run") == output.count("src.gpu_slots"), output
+    # device_taking == allocated == the device-flag count leaves the device-free launches provably
+    # holding no device, since the three totals account for every planned launch.
+    device_taking, allocated, _ = _launch_counts(output)
+    assert device_taking > 0, output
+    assert device_taking == allocated, output
+    assert output.count("--gpus device=@GPU_ID@") == allocated, output
 
 
 # With an explicit pool the guarantee is that no container can reach a device without going through the allocator, so
@@ -69,8 +87,10 @@ def test_pinned_pool_wraps_every_planned_container(tmp_path: Path) -> None:
     assert SLOT_PREFIX in output, output
     assert "--gpus device=@GPU_ID@" in output, output
     assert "stage-1-vmec-gpu" in output, output
-    assert output.count("docker run") > 0, output
-    assert output.count("docker run") == output.count("src.gpu_slots"), output
+    device_taking, allocated, _ = _launch_counts(output)
+    assert device_taking > 0, output
+    assert device_taking == allocated, output
+    assert output.count("--gpus device=@GPU_ID@") == allocated, output
 
 
 # A mistyped id must be caught while the DAG is being built, before any job runs, and the message must name the entry

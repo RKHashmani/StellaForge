@@ -9,6 +9,10 @@ checkpoint and its ``stage4_run_one``/``stage4_collect`` rules.
 from __future__ import annotations
 
 _SCRIPT = "stages/stage4-turbulence/spectrax_gk_radial_scan.py"
+_RELABEL_SCRIPT = "stages/stage4-turbulence/relabel_neopax_flux_radius.py"
+
+# Minor-radius conventions stage4.neopax_radius_relabel accepts, matching the script's own choices.
+RELABEL_CONVENTIONS: tuple[str, ...] = ("boozer_volume",)
 
 # (config_key, cli_flag) accepted by the `prepare` subcommand; emitted as `<flag> <value>` when set.
 # The config key t_max is spelled --t-final, an accepted alias whose argparse dest is t_max.
@@ -192,3 +196,81 @@ def collect_cmd(
     _append_optional_flags(parts, stage_cfg, _COLLECT_OPTIONAL_FLAGS)
     _append_bool_flags(parts, stage_cfg, _COLLECT_BOOL_FLAGS)
     return " ".join(parts)
+
+
+def resolve_radius_relabel(config: dict) -> str | None:
+    """Turn a run config's ``stage4.neopax_radius_relabel`` key into a minor-radius convention.
+
+    Parameters
+    ----------
+    config : dict
+        Parsed run config. ``stage4.neopax_radius_relabel`` is ``false`` (the default) to write the
+        flux file's radial grid through unchanged, or ``"boozer_volume"`` for the convention NEOPAX
+        builds its grid on today.
+
+    Returns
+    -------
+    str or None
+        The convention name, or ``None`` when the step is off.
+
+    Raises
+    ------
+    ValueError
+        If the key is neither ``false`` nor one of :data:`RELABEL_CONVENTIONS`.
+    """
+    value = config.get("stage4", {}).get("neopax_radius_relabel", False)
+    if value is False:
+        return None
+    if not isinstance(value, str) or value not in RELABEL_CONVENTIONS:
+        raise ValueError(
+            f"config['stage4']['neopax_radius_relabel'] is {value!r}; write false to skip the step, or one of "
+            f"{', '.join(repr(c) for c in RELABEL_CONVENTIONS)} to name the minor-radius convention NEOPAX builds "
+            "its radial grid on."
+        )
+    return value
+
+
+def relabel_cmd(
+    *,
+    docker_prefix: str,
+    image: str,
+    flux_file: str,
+    wout: str,
+    boozer: str,
+    convention: str,
+    rho_edge: float,
+) -> str:
+    """Compose the shell command that puts the collected flux file on NEOPAX's radial grid.
+
+    Parameters
+    ----------
+    docker_prefix : str
+        ``docker run ...`` prefix prepared by the Snakefile. Rewriting one HDF5 dataset needs no
+        GPU, so the caller passes the prefix that claims neither a GPU nor a scheduling slot.
+    image : str
+        Container image for Stage 4 (e.g. ``ghcr.io/.../stage-4-spectrax-cpu``).
+    flux_file : str
+        ``neopax_fluxes.h5`` to rewrite in place.
+    wout : str
+        Stage 1 VMEC output supplying the plasma volume.
+    boozer : str
+        Stage 2 Boozer output supplying ``rmnc_b``.
+    convention : str
+        Minor-radius convention from :func:`resolve_radius_relabel`.
+    rho_edge : float
+        NEOPAX's ``[geometry].rho_edge``, from ``stage5_helper.read_rho_edge``.
+
+    Returns
+    -------
+    str
+        A single-line command that rewrites the flux file's ``r`` dataset in place.
+    """
+    return " ".join([
+        f"{docker_prefix} {image}",
+        f"python {_RELABEL_SCRIPT}",
+        f"--flux-file {flux_file}",
+        f"--wout {wout}",
+        f"--boozer {boozer}",
+        f"--convention {convention}",
+        f"--rho-edge {rho_edge}",
+    ])
