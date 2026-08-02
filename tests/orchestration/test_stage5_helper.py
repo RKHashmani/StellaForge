@@ -1,17 +1,21 @@
-"""Tests for ``src.stage5_helper.prepare_neopax_config``.
+"""Tests for the ``src.stage5_helper`` readers of the NEOPAX template.
 
 NEOPAX is configured by a TOML file, not CLI flags. ``prepare_neopax_config``
 writes a path-resolved copy of the shared template under the run's Stage 5 output
 dir, rewriting its five path fields *relative to that copy's own directory* (NEOPAX
 runs there) and never touching the committed template. These tests pin the rewrite
 targets, the trailing slash on ``transport_output_dir``, and template immutability.
+``read_rho_edge`` reads the radial grid's outer edge back out of the same template,
+which is what keeps the Stage 4 relabelling step on the grid NEOPAX will build.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from src.stage5_helper import prepare_neopax_config
+import pytest
+
+from src.stage5_helper import prepare_neopax_config, read_rho_edge
 
 _TEMPLATE = (
     'vmec_file = "PLACEHOLDER"\n'
@@ -63,3 +67,30 @@ def test_rewrites_five_paths_relative_and_quoted(tmp_path: Path) -> None:
 def test_template_left_unmodified(tmp_path: Path) -> None:
     template, _ = _prepare(tmp_path)
     assert template.read_text() == _TEMPLATE
+
+
+# --- read_rho_edge ---
+
+def _write_template(tmp_path: Path, body: str) -> Path:
+    path = tmp_path / "common_input.toml"
+    path.write_text(body)
+    return path
+
+
+def test_read_rho_edge_returns_the_configured_value(tmp_path: Path) -> None:
+    assert read_rho_edge(str(_write_template(tmp_path, "[geometry]\nrho_edge = 0.7\n"))) == 0.7
+
+
+# NEOPAX's own default is 1.0, so a template that never mentions rho_edge grids out to the boundary. Both an absent key
+# and an absent [geometry] table have to resolve to it, or the relabelling step would reject a perfectly good grid.
+@pytest.mark.parametrize("body", ["[geometry]\nn_radial = 5\n", "[species]\nn_species = 1\n"])
+def test_read_rho_edge_defaults_to_one(tmp_path: Path, body: str) -> None:
+    assert read_rho_edge(str(_write_template(tmp_path, body))) == 1.0
+
+
+# rho_edge scales every stage's radial grid, so a value outside (0, 1] is never recoverable downstream. It is caught at
+# Snakefile parse time, before any stage runs. A bool passes isinstance(x, int) in Python, hence its own case here.
+@pytest.mark.parametrize("value", ['"0.7"', "true", "1.5", "0.0", "-0.5", "nan"])
+def test_read_rho_edge_rejects_a_value_outside_the_unit_interval(tmp_path: Path, value: str) -> None:
+    with pytest.raises(ValueError, match=r"\[geometry\].rho_edge"):
+        read_rho_edge(str(_write_template(tmp_path, f"[geometry]\nrho_edge = {value}\n")))

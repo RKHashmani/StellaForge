@@ -8,9 +8,43 @@ copy. Called at Snakefile parse time.
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 from .utils import apply_assignments
+
+
+def read_rho_edge(s5_config_template: str) -> float:
+    """Return ``[geometry].rho_edge`` from the NEOPAX template, or NEOPAX's default of 1.0.
+
+    Every stage builds its radial grid as ``linspace(0, rho_edge, n_radial)``, NEOPAX in
+    ``_geometry_models.py`` and the Stage 3 and Stage 4 scans in this repo, so the value has to
+    reach the Stage 4 flux-file relabelling step too, which otherwise assumes the grid runs out to
+    ``rho = 1``. Read here rather than duplicated into ``config.yaml`` so the NEOPAX template stays
+    the single source of truth for the transport grid.
+
+    Parameters
+    ----------
+    s5_config_template : str
+        Path to the shared NEOPAX template (``inputs/<run>/common_input.toml``).
+
+    Returns
+    -------
+    float
+        ``[geometry].rho_edge``, defaulting to ``1.0`` when the key is absent.
+
+    Raises
+    ------
+    ValueError
+        If the key is present but not a positive, finite number.
+    """
+    cfg = tomllib.loads(Path(s5_config_template).read_bytes().decode("utf-8"))
+    rho_edge = cfg.get("geometry", {}).get("rho_edge", 1.0)
+    if not isinstance(rho_edge, (int, float)) or isinstance(rho_edge, bool) or not 0.0 < float(rho_edge) <= 1.0:
+        raise ValueError(
+            f"{s5_config_template}: [geometry].rho_edge must be a number in (0, 1], got {rho_edge!r}."
+        )
+    return float(rho_edge)
 
 
 def prepare_neopax_config(

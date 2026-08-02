@@ -4,7 +4,13 @@ import json
 import posixpath
 
 from src import stage3_helper, stage4_helper, stage5_helper
-from src.utils import resolve_gpu_settings, resolve_pipeline_paths, resolve_rerun_flags, RESOLVED_COMMON_CONFIG
+from src.utils import (
+    resolve_docker_user,
+    resolve_gpu_settings,
+    resolve_pipeline_paths,
+    resolve_rerun_flags,
+    RESOLVED_COMMON_CONFIG,
+)
 
 # Require an explicit run config
 if not config:
@@ -52,14 +58,16 @@ STAGE3_JAX_IMG = f"ghcr.io/driftless-star/driftless-star:stage-3-sfincs-{DEVICE}
 STAGE4_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-4-spectrax-{DEVICE}"
 STAGE5_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-5-neopax-{DEVICE}"
 
-# --user: make bind-mounted writes host-owned (Linux docker otherwise writes as root).
+# --user: detects the runtime and picks the uid whose writes land host-owned, the invoking user or container root.
 # -e HOME=/tmp: pixi activation needs a writable HOME after dropping root.
-DOCKER_PREFIX = (
-    f'{SLOT_PREFIX}docker run --rm --pull=missing {GPU_FLAG}'
-    '--user "$(id -u):$(id -g)" '
+DOCKER_TAIL = (
+    f'{resolve_docker_user(config)}'
     '-e HOME=/tmp '
     '-v "$PWD:/work" -w /work'
 )
+DOCKER_PREFIX = f'{SLOT_PREFIX}docker run --rm --pull=missing {GPU_FLAG}{DOCKER_TAIL}'
+# Steps that only rewrite a file take neither a GPU flag nor a scheduling slot to wait on.
+DOCKER_PREFIX_CPU = f'docker run --rm --pull=missing {DOCKER_TAIL}'
 
 shell.executable("bash")
 # Propagate failures through `cmd | tee {log}` pipelines so a crashed stage
@@ -96,6 +104,8 @@ if REUSE_OUTPUT_DIR is not None:
 
 STAGE3_CFG = config["stage3"]["sfincs_jax"]
 STAGE4_CFG = config["stage4"]["spectrax_gk"]
+# Resolved here rather than beside its rule so a misspelled convention is caught even when the run freezes Stage 4.
+RADIUS_RELABEL_CONVENTION = stage4_helper.resolve_radius_relabel(config)
 
 # Stage 5 post-processing convergence threshold (see the `convergence` block in inputs/<run>/config.yaml).
 PRESSURE_REL_TOL = config.get("convergence", {}).get("pressure_rel_tol", 1.0e-2)
@@ -257,6 +267,18 @@ if RERUN["stage4"]:
             for run in manifest["runs"]
         ]
 
+    # Stage 4 writes the flux file on VMEC's Aminor_p while NEOPAX interpolates it onto a grid built
+    # from its own minor radius, so the collected grid is rewritten onto NEOPAX's convention here.
+    NEOPAX_RADIUS_RELABEL_CMD = " && " + stage4_helper.relabel_cmd(
+        docker_prefix=DOCKER_PREFIX_CPU,
+        image=STAGE4_IMG,
+        flux_file=S4_OUTPUT,
+        wout=S1_OUTPUT,
+        boozer=S2_OUTPUT,
+        convention=RADIUS_RELABEL_CONVENTION,
+        rho_edge=stage5_helper.read_rho_edge(S5_CONFIG),
+    ) if RADIUS_RELABEL_CONVENTION else ""
+
     rule stage4_collect:
         input:
             manifest = S4_MANIFEST,
@@ -266,12 +288,14 @@ if RERUN["stage4"]:
         log:
             f"{P['stage4_dir']}/{RUN_NAME}.collect.log"
         shell:
-            stage4_helper.collect_cmd(
+            # Grouped so the pipe captures both commands, since `a && b | tee` would bind the pipe
+            # to b alone and drop the collect output from the log.
+            "( " + stage4_helper.collect_cmd(
                 docker_prefix=DOCKER_PREFIX,
                 image=STAGE4_IMG,
                 stage_cfg=STAGE4_CFG,
                 output_dir=P["stage4_dir"],
-            ) + " 2>&1 | tee {log}"
+            ) + NEOPAX_RADIUS_RELABEL_CMD + " ) 2>&1 | tee {log}"
 
 rule stage5_neopax:
     input:
