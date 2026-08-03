@@ -136,6 +136,29 @@ def test_device_key_fails_at_parse_with_migration_hint(tmp_path: Path) -> None:
     assert "gpu_ids" in output, output
 
 
+def test_apptainer_runtime_plans_native_gpu_image_and_absolute_binds(tmp_path: Path) -> None:
+    """The CHTC runtime must not leave a nested ``docker run`` in planned jobs."""
+    result = _dry_run(
+        tmp_path,
+        targets=[],
+        config_overrides=["container_runtime=apptainer", "gpu_ids=all"],
+        printshellcmds=True,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "apptainer run --unsquash --nv" in output, output
+    assert 'oras://ghcr.io/driftless-star/driftless-star:apptainer-stage-1-vmec-gpu' in output, output
+    assert f'--bind "{tmp_path}/out:{tmp_path}/out"' in output, output
+    assert "docker run" not in output, output
+
+
+def test_unknown_container_runtime_fails_at_parse(tmp_path: Path) -> None:
+    result = _dry_run(tmp_path, targets=[], config_overrides=["container_runtime=singularity"])
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "container_runtime" in output, output
+
+
 # A perturbed fd_gradients sibling run-directory must be schedulable by stage4_run_one exactly like a baseline
 # surface: its basename satisfies the shared SURF_PATTERN wildcard constraint, so asking Snakemake to build that
 # run.diagnostics.csv plans the per-surface rule. A sibling whose channel letter falls outside n/t violates the

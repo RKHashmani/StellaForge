@@ -1,0 +1,53 @@
+Bootstrap: docker
+From: ghcr.io/prefix-dev/pixi:noble
+Stage: build
+
+%arguments
+    ENVIRONMENT=chtc-submit
+
+%files
+../pixi.toml /app/
+../pixi.lock /app/
+
+%post
+#!/usr/bin/env bash
+export XDG_CACHE_HOME=/opt/cache
+export PIXI_CACHE_DIR=/opt/cache/pixi
+mkdir -p "${XDG_CACHE_HOME}" "${PIXI_CACHE_DIR}"
+pixi global install apptainer git
+cd /app/
+pixi install --locked --environment {{ ENVIRONMENT }} 
+echo "#!/usr/bin/env bash" > /app/entrypoint.sh && \
+pixi shell-hook --environment {{ ENVIRONMENT }} -s bash >> /app/entrypoint.sh
+
+Bootstrap: docker
+From: ghcr.io/prefix-dev/pixi:noble
+Stage: final
+
+%arguments
+    ENVIRONMENT=chtc-submit
+
+%files from build
+/app/.pixi/envs/{{ ENVIRONMENT }} /app/.pixi/envs/{{ ENVIRONMENT }}
+/app/pixi.toml /app/pixi.toml
+/app/pixi.lock /app/pixi.lock
+/app/entrypoint.sh /app/entrypoint.sh
+/root/.pixi /root/.pixi
+
+%post
+#!/usr/bin/env bash
+chmod +x /app/entrypoint.sh
+mkdir -p /tmp/.cache /opt/cache/pixi
+
+%environment
+export PATH="/app/.pixi/envs/{{ ENVIRONMENT }}/bin:/root/.pixi/bin:${PATH}"
+export XDG_CACHE_HOME="/tmp/.cache"
+export PIXI_CACHE_DIR="/opt/cache/pixi"
+. /app/entrypoint.sh
+
+%test
+#!/usr/bin/env -S bash -e
+export XDG_CACHE_HOME=/tmp/.cache
+command -v snakemake
+command -v apptainer
+snakemake --help >/dev/null

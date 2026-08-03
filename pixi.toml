@@ -1,5 +1,5 @@
 [workspace]
-channels = ["conda-forge"]
+channels = ["conda-forge", "bioconda"]
 name = "driftless-star"
 platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
 version = "0.1.0"
@@ -29,3 +29,9 @@ cmd = "pytest -m 'not docker and not stage_env and not e2e' && pytest --doctest-
 [environments]
 pipeline = { features = ["pipeline"], no-default-feature = true }
 test = { features = ["pipeline", "test"], no-default-feature = true }
+
+[dependencies]
+snakemake = ">=9.24.0,<10"
+
+[target.linux-64.pypi-dependencies]
+snakemake-executor-plugin-htcondor = "==0.3.0"
