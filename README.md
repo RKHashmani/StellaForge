@@ -115,32 +115,36 @@ Snakemake DAG, end-to-end tests, and publishing. Details in the [Guide](docs/gui
 
 ## Usage
 
-A *run* is a folder under `inputs/` holding its run config (`config.yaml`) and every stage input. A fresh clone ships one ready-to-run example, `inputs/quick_run/`:
+A *run* is a folder under `inputs/` holding its run config (`config.yaml`) and every stage input. A fresh clone ships one ready-to-run example, `inputs/quick_run/`. `common_input.toml` in the run folder is the shared transport config read by Stages 3, 4, and 5.
+
+`driftless-star` iterates toward transport-consistent profiles, sequencing independent forward passes and feeding each pass's Stage 5 transport solution into the next one as a boundary refit from the evolved pressure and as kinetic profiles prescribed to Stages 3, 4, and 5:
 
 ```
-pixi run -e pipeline snakemake --configfile inputs/quick_run/config.yaml --cores 4
+pixi run driftless-star --config inputs/quick_run/config.yaml --max-iters 3 --cores 4
 ```
 
-All artifacts land under `outputs/<run>/stageN_<name>/`, one directory per stage (`outputs/` is gitignored). `common_input.toml` in the run folder is the shared transport config read by Stages 3, 4, and 5.
+Each iteration is a full pipeline run under its own `outputs/<run>/loop/iter_N/` tree (`outputs/` is gitignored), and the driver stops early once the pressure profile settles within the config's `convergence.pressure_rel_tol`. Stages listed under `loop.rerun` as `false` are frozen, so iterations after the first reuse their iteration 1 artifacts. See [docs/mvp-pipeline.md](docs/mvp-pipeline.md#closing-the-loop).
 
-To define your own run, copy the example, repoint `input_dir`/`output_dir`, and edit the inputs:
+### Run a single forward pass
+
+One traversal from Stage 1 to Stage 5, without the transport feedback the loop adds:
+
+```
+pixi run driftless-star-fwd --configfile inputs/quick_run/config.yaml --cores 4
+```
+
+Its artifacts land under `outputs/<run>/stageN_<name>/`, one directory per stage, which is the flat layout the stage specs reference. A loop iteration writes that same tree one level down, under `outputs/<run>/loop/iter_N/output/`.
+
+### Define your own run
+
+Copy the example, repoint `input_dir`/`output_dir`, and edit the inputs. Either entry point takes the new config the same way:
 
 ```
 cp -r inputs/quick_run inputs/my_run
 # in inputs/my_run/config.yaml, set input_dir: inputs/my_run and output_dir: outputs/my_run,
 # then edit the boundary, profiles, and resolution as needed
-pixi run -e pipeline snakemake --configfile inputs/my_run/config.yaml --cores 4
+pixi run driftless-star-fwd --configfile inputs/my_run/config.yaml --cores 4
 ```
-
-### Run the closed loop
-
-The commands above are a single forward pass. To iterate toward transport-consistent profiles, the `ouroboros` driver sequences independent forward passes, feeding each pass's Stage 5 transport solution into the next one as a boundary refit from the evolved pressure and as kinetic profiles prescribed to Stages 3, 4, and 5:
-
-```
-pixi run -e pipeline ouroboros --config inputs/quick_run/config.yaml --max-iters 3 --cores 4
-```
-
-Each iteration is a full pipeline run under its own `outputs/<run>/loop/iter_N/` tree, and the driver stops early once the pressure profile settles within the config's `convergence.pressure_rel_tol`. Stages listed under `loop.rerun` as `false` are frozen, so iterations after the first reuse their iteration 1 artifacts. See [docs/mvp-pipeline.md](docs/mvp-pipeline.md#closing-the-loop).
 
 ### Run on GPUs
 
@@ -154,8 +158,8 @@ jobs_per_gpu: 2      # concurrent jobs allowed per GPU
 Every concurrent job is pinned to one free slot of that pool, so the pool offers pool size times `jobs_per_gpu` slots and saturating it takes at least that many cores. Either key can be overridden per invocation, on a forward pass or on the loop:
 
 ```
-pixi run -e pipeline snakemake --configfile inputs/quick_run/config.yaml --cores 8 --config gpu_ids=4,5,6,7 jobs_per_gpu=2
-pixi run -e pipeline ouroboros --config inputs/quick_run/config.yaml --cores 8 --gpu-ids 4,5,6,7 --jobs-per-gpu 2
+pixi run driftless-star-fwd --configfile inputs/quick_run/config.yaml --cores 8 --config gpu_ids=4,5,6,7 jobs_per_gpu=2
+pixi run driftless-star --config inputs/quick_run/config.yaml --cores 8 --gpu-ids 4,5,6,7 --jobs-per-gpu 2
 ```
 
 GPU mode needs an NVIDIA host with `nvidia-container-toolkit` configured on the docker daemon. See [docs/mvp-pipeline.md](docs/mvp-pipeline.md#multi-gpu-scheduling) for how the pinning works, how to share a host with other users, and the current limitations.
