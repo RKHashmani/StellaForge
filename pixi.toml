@@ -13,8 +13,15 @@ snakemake-minimal = ">=9.16,<10"
 graphviz = ">=9,<15"
 pytest = ">=8,<9"
 
-[feature.pipeline.tasks.ouroboros]
+[feature.pipeline.tasks.driftless-star]
 cmd = "python -m src.ouroboros"
+default-environment = "pipeline"
+description = "Closed-loop driver; --max-iters 1 for a single pass"
+
+[feature.pipeline.tasks.driftless-star-fwd]
+cmd = "snakemake"
+default-environment = "pipeline"
+description = "Single forward pass, Stage 1 through Stage 5"
 
 [feature.pipeline.target.linux-64.pypi-dependencies]
 snakemake-executor-plugin-htcondor = "==0.3.0"
