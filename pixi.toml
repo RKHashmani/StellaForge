@@ -16,6 +16,9 @@ pytest = ">=8,<9"
 [feature.pipeline.tasks.ouroboros]
 cmd = "python -m src.ouroboros"
 
+[feature.pipeline.target.linux-64.pypi-dependencies]
+snakemake-executor-plugin-htcondor = "==0.3.0"
+
 [feature.test.dependencies]
 numpy = ">=2,<3"
 h5py = ">=3,<4"

@@ -4,20 +4,17 @@ This directory contains the files used to run the pipeline on CHTC with HTCondor
 
 A brief demo for running the quick_run exmaple is as follows. In actual runs, replace with actual config and inputs.
 
-First install:
+First install snakemake-executor-plugin-htcondor:
 ```
-pixi workspace channel add conda-forge
-pixi workspace channel add bioconda
-pixi add snakemake
-pixi install
 pixi add --pypi \
+  --feature pipeline \
   --platform linux-64 \
   "snakemake-executor-plugin-htcondor==0.3.0"
 ```
 
 In root dir (i.e. /driftless-star), run with:
 ```
-pixi run snakemake \
+pixi run -e pipeline snakemake \
     --profile htcondor/profiles/htcondor-gpu \
     --configfile /staging/groups/driftless_star/test_run/inputs/quick_run/config.yaml \
     --config \
@@ -29,7 +26,7 @@ pixi run snakemake \
 
 If `LockException` is recevied, it is usually because there is one previously unfinished run. To unlock, run:
 ```
-pixi run snakemake --unlock \
+pixi run -e pipeline snakemake --unlock \
     --profile htcondor/profiles/htcondor-gpu \
     --configfile /staging/YOUR_STAGING_DIR/driftless-star/inputs/quick_run/config.yaml \
     --config \

@@ -377,6 +377,8 @@ environments:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
     - url: https://conda.anaconda.org/bioconda/
+    indexes:
+    - https://pypi.org/simple
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/bioconda/noarch/snakemake-interface-common-1.23.0-pyh84498cf_0.conda
@@ -562,6 +564,9 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/yte-1.9.4-pyhd8ed1ab_0.conda
+      - pypi: https://files.pythonhosted.org/packages/28/90/a4a3652e832667917383f8d34112bdb37b78a6d14efc049e22a2c8192524/snakemake_interface_common-1.23.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/78/ee/a79868ed4f82318f372af8ba02a2110c6a61398c2697febe75bbcc0e1bdc/htcondor-24.12.22-cp313-cp313-manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/e9/fd/bb055e0a24290228713a6c44319aa4e750b5ce612a1f60614a5456309b2c/snakemake_executor_plugin_htcondor-0.3.0-py3-none-any.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/bioconda/noarch/snakemake-interface-common-1.23.0-pyh84498cf_0.conda
       - conda: https://conda.anaconda.org/bioconda/noarch/snakemake-interface-executor-plugins-9.4.0-pyh84498cf_0.conda
@@ -892,6 +897,8 @@ environments:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
     - url: https://conda.anaconda.org/bioconda/
+    indexes:
+    - https://pypi.org/simple
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/bioconda/noarch/snakemake-interface-common-1.23.0-pyhdfd78af_1.conda
@@ -1110,6 +1117,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/yte-1.9.4-pyhd8ed1ab_0.conda
+      - pypi: https://files.pythonhosted.org/packages/10/b3/4b411948980a8a48f301ae1a8f05643bada777a28e0657ed37e8e5881654/htcondor-24.12.22-cp314-cp314-manylinux_2_28_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/e9/fd/bb055e0a24290228713a6c44319aa4e750b5ce612a1f60614a5456309b2c/snakemake_executor_plugin_htcondor-0.3.0-py3-none-any.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/bioconda/noarch/snakemake-interface-common-1.23.0-pyhdfd78af_1.conda
       - conda: https://conda.anaconda.org/bioconda/noarch/snakemake-interface-executor-plugins-9.4.0-pyh84498cf_0.conda
@@ -11413,6 +11422,19 @@ packages:
   name: htcondor
   version: 24.12.22
   sha256: 1a8892bd7628f0eb70cda47911d93e77a427dad32cc43a76ac0b63bccfbac727
+- pypi: https://files.pythonhosted.org/packages/28/90/a4a3652e832667917383f8d34112bdb37b78a6d14efc049e22a2c8192524/snakemake_interface_common-1.23.0-py3-none-any.whl
+  name: snakemake-interface-common
+  version: 1.23.0
+  sha256: 43bb10102d07149f27787dfc65a7342b86ff772973e7f9ca4940c89cb412a11e
+  requires_dist:
+  - argparse-dataclass>=2.0.0
+  - configargparse>=1.7
+  - packaging>=24.0,<26.0
+  requires_python: '>=3.8'
+- pypi: https://files.pythonhosted.org/packages/78/ee/a79868ed4f82318f372af8ba02a2110c6a61398c2697febe75bbcc0e1bdc/htcondor-24.12.22-cp313-cp313-manylinux_2_28_x86_64.whl
+  name: htcondor
+  version: 24.12.22
+  sha256: ecf8f1a8aea2cfb6b077c9fece6b399f6d0ec53d8b9eb7ad9ba39f1432ec8989
 - pypi: https://files.pythonhosted.org/packages/e9/fd/bb055e0a24290228713a6c44319aa4e750b5ce612a1f60614a5456309b2c/snakemake_executor_plugin_htcondor-0.3.0-py3-none-any.whl
   name: snakemake-executor-plugin-htcondor
   version: 0.3.0
