@@ -161,10 +161,16 @@ After Phase 1 is complete for a stage, move to containerization and testing.
 driftless-star is a **recipe repo**: it contains everything needed to build and run the containerized pipeline, but does not contain the upstream solver code itself.
 
 **Two decoupled Pixi workspaces.** The repo splits dependency management along the orchestration / physics boundary:
-- **Root `pixi.toml`** -- a single `pipeline` environment (`snakemake-minimal`, `graphviz`, `pytest`). Installed directly on the execution node; Snakemake is never containerized because nested containers are fragile and not widely supported on shared compute.
+- **Root `pixi.toml`** -- orchestration. `pipeline` (`snakemake-minimal`, `graphviz`, `pytest`, plus the HTCondor executor plugin on linux-64) and `test`, which adds the numerical libraries the test suite needs. Both are installed directly on the execution node; Snakemake is never containerized for a local run, because nested containers are fragile and not widely supported on shared compute.
 - **`stages/pixi.toml`** -- per-stage physics environments (e.g., `stage-1-vmec`, `stage-1-vmec-gpu`) that fully specify each stack. These are only consumed by the container builder, so they are entirely isolated from the orchestration env.
 
 Each workspace has its own lockfile (`pixi.lock` / `stages/pixi.lock`).
+
+**The one containerized orchestration environment.** Cluster execution is the exception to "Snakemake is never containerized": a remote HTCondor job has no access to the submit host's `.pixi/`, so it runs inside a parent image that carries its own Snakemake. That image's environment, `htcondor-runtime`, lives in the root `pixi.toml` alongside `pipeline` and is built by `executors/htcondor/apptainer.def`. It holds `snakemake-minimal` and nothing else -- the executor rewrites each remote job into a plain `snakemake --mode remote ...` with no `--executor` flag, so only the submit host needs the plugin.
+
+Because the executor formats each remote command line using the **submit host's** flag vocabulary, `htcondor-runtime` and `pipeline` must resolve to the *same* Snakemake version; a mismatch surfaces on the execute node as an opaque `unrecognized arguments` error. Declaring the same version range is not enough, since Pixi re-solves only the environments whose specs changed and two environments in one lockfile can drift apart. `htcondor-runtime` therefore carries an exact `==` pin, and `tests/orchestration/test_pixi_envs.py` fails the suite if the two ever diverge. That test's module docstring carries the full rationale, including how the executor plugin is declared; `executors/htcondor/README.md` has the build command and the run instructions.
+
+**Scheduler integrations** live under `executors/<scheduler>/` -- profiles, job wrapper, container definition, and docs for one Snakemake executor plugin. `executors/htcondor/` is the only one today.
 
 **The same boundary at the code level.** Two kinds of stage code live in the repo and should not be confused, despite the similar names:
 - **`stages/stage{N}-{name}/*.py`** -- physics scripts. Self-contained scripts that import the upstream solver and do the numerical work (e.g., radial flux scans, the Boozer transform, pressure post-processing). They run *inside* the stage containers, and `stages/` is the Docker build context.
@@ -193,7 +199,7 @@ the named `linux-64-cuda` platform, which declares CUDA 12 independently of the
 machine generating the lockfile; CPU environments continue to use the standard
 platform names.
 
-Updating the orchestration env follows the same pattern against the root `pixi.toml` / `pixi.lock`.
+Updating the orchestration env follows the same pattern against the root `pixi.toml` / `pixi.lock`. If that update moves `pipeline`'s Snakemake, repin `feature.htcondor-runtime` to match and rebuild `htcondor-runtime.sif`.
 
 ### Verify Container I/O
 
