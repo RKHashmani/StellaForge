@@ -14,9 +14,10 @@ if [[ ! -w "${HOME}" ]]; then
 fi
 
 export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-${repo_root}/.snakemake/apptainer-cache}"
-export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-${TMPDIR:-/tmp}}"
+export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-${repo_root}/.snakemake/apptainer-tmp}"
 export SINGULARITY_CACHEDIR="${SINGULARITY_CACHEDIR:-${APPTAINER_CACHEDIR}}"
-mkdir -p "${APPTAINER_CACHEDIR}"
+export SINGULARITY_TMPDIR="${SINGULARITY_TMPDIR:-${APPTAINER_TMPDIR}}"
+mkdir -p "${APPTAINER_CACHEDIR}" "${APPTAINER_TMPDIR}"
 
 if [[ ! -x "${runtime_snakemake}" ]]; then
   echo "[job_wrapper] FATAL: no executable Snakemake at ${runtime_snakemake}" >&2
