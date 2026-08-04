@@ -15,6 +15,7 @@ Stage: build
 #!/usr/bin/env bash
 export XDG_CACHE_HOME=/opt/cache
 export PIXI_CACHE_DIR=/opt/cache/pixi
+export PIXI_HOME=/opt/pixi
 mkdir -p "${XDG_CACHE_HOME}" "${PIXI_CACHE_DIR}"
 pixi global install apptainer git
 cd /app/
@@ -34,7 +35,7 @@ Stage: final
 /app/pixi.toml /app/pixi.toml
 /app/pixi.lock /app/pixi.lock
 /app/entrypoint.sh /app/entrypoint.sh
-/root/.pixi /root/.pixi
+/opt/pixi /opt/pixi
 
 %post
 #!/usr/bin/env bash
@@ -42,7 +43,7 @@ chmod +x /app/entrypoint.sh
 mkdir -p /tmp/.cache /opt/cache/pixi
 
 %environment
-export PATH="/app/.pixi/envs/{{ ENVIRONMENT }}/bin:/root/.pixi/bin:${PATH}"
+export PATH="/app/.pixi/envs/{{ ENVIRONMENT }}/bin:/opt/pixi/bin:${PATH}"
 export XDG_CACHE_HOME="/tmp/.cache"
 export PIXI_CACHE_DIR="/opt/cache/pixi"
 . /app/entrypoint.sh
