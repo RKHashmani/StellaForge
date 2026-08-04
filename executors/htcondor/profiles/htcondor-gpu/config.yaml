@@ -1,9 +1,9 @@
 # Run Snakemake on the submit host:
 #
-  # pixi run snakemake \
-  #   --profile htcondor/profiles/htcondor-gpu \
+  # pixi run driftless-star-fwd \
+  #   --profile executors/htcondor/profiles/htcondor-gpu \
   #   --configfile inputs/quick_run/config.yaml \
-  #   --config gpu_ids=all container_runtime=apptainer \ 
+  #   --config gpu_ids=all container_runtime=apptainer \
   #   --cores 8
 #
 # Each remote rule job runs inside the parent Apptainer image below.
@@ -19,18 +19,15 @@ printshellcmds: true
 show-failed-logs: true
 restart-times: 0
 jobname: "{rule}-{jobid}"
+# The executor sets HTCondor's log, output, and error paths itself from this directory.
 htcondor-jobdir: jobs
 
 default-resources:
   universe: "container"
-  container_image: "chtc-runtime.sif"
-  job_wrapper: "htcondor/profiles/htcondor/job_wrapper.sh"
-  htcondor_transfer_input_files: "Snakefile,src,stages,inputs,tests,pixi.lock,pixi.toml,htcondor"
+  container_image: "htcondor-runtime.sif"
+  job_wrapper: "executors/htcondor/job_wrapper.sh"
+  htcondor_transfer_input_files: "Snakefile,src,stages,inputs,executors/htcondor"
   requirements: '(HasCHTCStaging==true)'
-  log: "chtc_logs/job_$(Cluster)_$(Process).log"
-  output: "chtc_logs/out_$(Cluster)_$(Process).out"
-  error: "chtc_logs/err_$(Cluster)_$(Process).err"
-  when_to_transfer_output: "ON_EXIT_OR_EVICT"
   request_gpus: "1"
   request_disk: "50GB"
   request_memory: "50GB"
