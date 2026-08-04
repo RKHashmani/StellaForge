@@ -2,6 +2,7 @@
 
 import json
 import posixpath
+from pathlib import Path
 
 from src import stage3_helper, stage4_helper, stage5_helper
 from src.utils import (
@@ -42,14 +43,11 @@ elif not RERUN["stage5"]:
         "target. The loop driver runs a single iteration for an all-frozen config instead of naming a reuse tree."
     )
 
-# The slot allocator holds one flock slot for the container's lifetime and substitutes the acquired id into @GPU_ID@.
-GPU_FLAG = ""
-SLOT_PREFIX = ""
-if DEVICE == "gpu":
-    GPU_FLAG = "--gpus device=@GPU_ID@ "
-    SLOT_PREFIX = (
-        f"python -m src.gpu_slots --gpu-ids {','.join(GPU.pool) if GPU.pool else 'all'} "
-        f"--jobs-per-gpu {GPU.jobs_per_gpu} --lock-dir .snakemake/gpu_slots -- "
+CONTAINER_RUNTIME = config.get("container_runtime", "docker")
+if CONTAINER_RUNTIME not in ("docker", "apptainer"):
+    raise ValueError(
+        "config['container_runtime'] must be 'docker' or 'apptainer', "
+        f"got {CONTAINER_RUNTIME!r}."
     )
 
 STAGE1_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-1-vmec-{DEVICE}"
@@ -58,16 +56,66 @@ STAGE3_JAX_IMG = f"ghcr.io/driftless-star/driftless-star:stage-3-sfincs-{DEVICE}
 STAGE4_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-4-spectrax-{DEVICE}"
 STAGE5_IMG     = f"ghcr.io/driftless-star/driftless-star:stage-5-neopax-{DEVICE}"
 
-# --user: detects the runtime and picks the uid whose writes land host-owned, the invoking user or container root.
-# -e HOME=/tmp: pixi activation needs a writable HOME after dropping root.
-DOCKER_TAIL = (
-    f'{resolve_docker_user(config)}'
-    '-e HOME=/tmp '
-    '-v "$PWD:/work" -w /work'
-)
-DOCKER_PREFIX = f'{SLOT_PREFIX}docker run --rm --pull=missing {GPU_FLAG}{DOCKER_TAIL}'
-# Steps that only rewrite a file take neither a GPU flag nor a scheduling slot to wait on.
-DOCKER_PREFIX_CPU = f'docker run --rm --pull=missing {DOCKER_TAIL}'
+
+def _apptainer_bind_flags(cfg: dict) -> str:
+    """Bind the workdir and absolute roots needed by nested Apptainer jobs."""
+    bind_specs = ['"$PWD:/work"']
+    paths = [cfg.get("input_dir"), cfg.get("output_dir")]
+    paths.append((cfg.get("loop") or {}).get("reuse_output_dir"))
+    for path in paths:
+        if not path:
+            continue
+        p = Path(path)
+        if p.is_absolute():
+            bind_specs.append(f'"{p}:{p}"')
+    return " ".join(f"--bind {spec}" for spec in dict.fromkeys(bind_specs))
+
+
+def _apptainer_image_ref(image: str) -> str:
+    """Map OCI-style workflow names to the native SIF images published to GHCR."""
+    if "://" in image or image.endswith(".sif"):
+        return image
+    repo, tag = image.rsplit(":", 1)
+    return f"oras://{repo}:apptainer-{tag}"
+
+
+# Docker keeps the newer per-device slot allocator. On HTCondor, each Apptainer
+# job already receives one isolated GPU, which `--nv` exposes to the nested SIF.
+if CONTAINER_RUNTIME == "docker":
+    gpu_flag = ""
+    slot_prefix = ""
+    if DEVICE == "gpu":
+        gpu_flag = "--gpus device=@GPU_ID@ "
+        slot_prefix = (
+            f"python -m src.gpu_slots --gpu-ids {','.join(GPU.pool) if GPU.pool else 'all'} "
+            f"--jobs-per-gpu {GPU.jobs_per_gpu} --lock-dir .snakemake/gpu_slots -- "
+        )
+    # --user makes bind-mounted writes host-owned; HOME must be writable for pixi activation.
+    docker_tail = (
+        f'{resolve_docker_user(config)}'
+        '-e HOME=/tmp '
+        '-v "$PWD:/work" -w /work '
+    )
+    CONTAINER_PREFIX = f"{slot_prefix}docker run --rm --pull=missing {gpu_flag}{docker_tail}"
+    # File-rewrite helpers need neither a GPU flag nor a scheduling slot.
+    CONTAINER_PREFIX_CPU = f"docker run --rm --pull=missing {docker_tail}"
+
+    def container_image_location(image: str) -> str:
+        return image
+else:
+    gpu_flag = "--nv " if DEVICE == "gpu" else ""
+    apptainer_tail = f'{_apptainer_bind_flags(config)} --pwd /work '
+    # --unsquash avoids FUSE-based SIF mounts on execute nodes whose parent
+    # HTCondor container does not expose /dev/fuse.
+    CONTAINER_PREFIX = f"apptainer run --unsquash {gpu_flag}{apptainer_tail}"
+    CONTAINER_PREFIX_CPU = f"apptainer run --unsquash {apptainer_tail}"
+
+    def container_image_location(image: str) -> str:
+        return _apptainer_image_ref(image)
+
+
+def container_image_ref(image: str) -> str:
+    return f"{CONTAINER_PREFIX}{container_image_location(image)}"
 
 shell.executable("bash")
 # Propagate failures through `cmd | tee {log}` pipelines so a crashed stage
@@ -134,7 +182,7 @@ if RERUN["stage1"]:
         output: S1_OUTPUT
         log:    f"{P['stage1_dir']}/{RUN_NAME}.log"
         shell:
-            f"{DOCKER_PREFIX} {STAGE1_IMG} "
+            f"{container_image_ref(STAGE1_IMG)} "
             f"vmec_jax {{input}} --output {{output}}"
             " 2>&1 | tee {log}"
 
@@ -144,7 +192,7 @@ if RERUN["stage2"]:
         output: S2_OUTPUT
         log:    f"{P['stage2_dir']}/{RUN_NAME}.log"
         shell:
-            f"{DOCKER_PREFIX} {STAGE2_IMG} "
+            f"{container_image_ref(STAGE2_IMG)} "
             "python stages/stage2-boozer/run_boozer.py --wout {input} --output {output}"
             " 2>&1 | tee {log}"
 
@@ -166,8 +214,8 @@ if RERUN["stage3"]:
             f"{P['stage3_dir']}/{RUN_NAME}.prepare.log"
         shell:
             stage3_helper.prepare_cmd(
-                docker_prefix=DOCKER_PREFIX,
-                image=STAGE3_JAX_IMG,
+                docker_prefix=CONTAINER_PREFIX,
+                image=container_image_location(STAGE3_JAX_IMG),
                 stage_cfg=STAGE3_CFG,
                 output_dir=P["stage3_dir"],
                 device=DEVICE,
@@ -184,8 +232,8 @@ if RERUN["stage3"]:
             f"{P['stage3_dir']}/runs/{{surf}}/run.log"
         shell:
             stage3_helper.run_one_cmd(
-                docker_prefix=DOCKER_PREFIX,
-                image=STAGE3_JAX_IMG,
+                docker_prefix=CONTAINER_PREFIX,
+                image=container_image_location(STAGE3_JAX_IMG),
                 output_dir=P["stage3_dir"],
                 device=DEVICE,
             ) + " 2>&1 | tee {log}"
@@ -210,8 +258,8 @@ if RERUN["stage3"]:
             f"{P['stage3_dir']}/{RUN_NAME}.collect.log"
         shell:
             stage3_helper.collect_cmd(
-                docker_prefix=DOCKER_PREFIX,
-                image=STAGE3_JAX_IMG,
+                docker_prefix=CONTAINER_PREFIX,
+                image=container_image_location(STAGE3_JAX_IMG),
                 stage_cfg=STAGE3_CFG,
                 output_dir=P["stage3_dir"],
             ) + " 2>&1 | tee {log}"
@@ -229,8 +277,8 @@ if RERUN["stage4"]:
             f"{P['stage4_dir']}/{RUN_NAME}.prepare.log"
         shell:
             stage4_helper.prepare_cmd(
-                docker_prefix=DOCKER_PREFIX,
-                image=STAGE4_IMG,
+                docker_prefix=CONTAINER_PREFIX,
+                image=container_image_location(STAGE4_IMG),
                 stage_cfg=STAGE4_CFG,
                 output_dir=P["stage4_dir"],
             ) + " 2>&1 | tee {log}"
@@ -246,8 +294,8 @@ if RERUN["stage4"]:
             f"{P['stage4_dir']}/runs/{{surf}}/run.log"
         shell:
             stage4_helper.run_one_cmd(
-                docker_prefix=DOCKER_PREFIX,
-                image=STAGE4_IMG,
+                docker_prefix=CONTAINER_PREFIX,
+                image=container_image_location(STAGE4_IMG),
                 stage_cfg=STAGE4_CFG,
                 output_dir=P["stage4_dir"],
                 device=DEVICE,
@@ -270,8 +318,8 @@ if RERUN["stage4"]:
     # Stage 4 writes the flux file on VMEC's Aminor_p while NEOPAX interpolates it onto a grid built
     # from its own minor radius, so the collected grid is rewritten onto NEOPAX's convention here.
     NEOPAX_RADIUS_RELABEL_CMD = " && " + stage4_helper.relabel_cmd(
-        docker_prefix=DOCKER_PREFIX_CPU,
-        image=STAGE4_IMG,
+        docker_prefix=CONTAINER_PREFIX_CPU,
+        image=container_image_location(STAGE4_IMG),
         flux_file=S4_OUTPUT,
         wout=S1_OUTPUT,
         boozer=S2_OUTPUT,
@@ -291,8 +339,8 @@ if RERUN["stage4"]:
             # Grouped so the pipe captures both commands, since `a && b | tee` would bind the pipe
             # to b alone and drop the collect output from the log.
             "( " + stage4_helper.collect_cmd(
-                docker_prefix=DOCKER_PREFIX,
-                image=STAGE4_IMG,
+                docker_prefix=CONTAINER_PREFIX,
+                image=container_image_location(STAGE4_IMG),
                 stage_cfg=STAGE4_CFG,
                 output_dir=P["stage4_dir"],
             ) + NEOPAX_RADIUS_RELABEL_CMD + " ) 2>&1 | tee {log}"
@@ -309,7 +357,7 @@ rule stage5_neopax:
     log:
         f"{P['stage5_dir']}/{RUN_NAME}.log"
     shell:
-        f"{DOCKER_PREFIX} {STAGE5_IMG} "
+        f"{container_image_ref(STAGE5_IMG)} "
         f"sh -c \"cd {P['stage5_dir']} && neopax {RESOLVED_COMMON_CONFIG}\""
         " 2>&1 | tee {log}"
 
@@ -327,7 +375,7 @@ rule stage5_post_processing:
         profiles_feedback = S5_CONFIG_FEEDBACK,
     log:    f"{P['stage5_post_dir']}/{RUN_NAME}.log"
     shell:
-        f'{DOCKER_PREFIX} {STAGE5_IMG} sh -c "'
+        f'{container_image_ref(STAGE5_IMG)} sh -c "'
         'python stages/stage5-post-processing/fit_vmec_pressure_from_transport_h5.py '
         'write-input {input.transport} {input.s1_input} --output-input {output.feedback} && '
         'python stages/stage5-post-processing/write_prescribed_profiles_from_transport_h5.py '

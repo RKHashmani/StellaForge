@@ -4,16 +4,19 @@ Runs the forward pass repeatedly, feeding each iteration's evolved Stage 1 input
 common input into the next. After the first iteration, the driver also switches Stages 3 and 4
 to ``profiles_source: prescribed`` via a config overrides file, so every profile consumer
 reads the transport-evolved profiles. Every iteration runs under its own
-``<output_dir>/loop/iter_N/``, where ``input/`` holds that pass's seeded inputs and ``output/``
-holds the stage outputs that pass computed (feedback artifacts and convergence signal).
-The committed inputs under ``input_dir`` are only ever read, never modified.
+``<output_dir>/loop/iter_N/``, where ``input/`` holds that pass's seeded inputs, a verbatim copy of the
+run config, and the ``effective_config.yaml`` recording that config with this invocation's command-line
+overrides applied, while ``output/`` holds the stage outputs that pass computed (feedback artifacts and
+convergence signal). The committed inputs under ``input_dir`` are only ever read, never modified.
 
 An optional ``loop.rerun`` block in the run config flags stages false to freeze them. When a stage is
 frozen the overrides file also carries the flag map and the iteration 1 tree, so the Snakefile reads that
 stage's artifacts from there. With every stage frozen the driver runs a single forward pass and stops.
 
-The ``--gpu-ids`` and ``--jobs-per-gpu`` flags override the run config's matching top-level keys for
-every iteration of one invocation, leaving the config file itself untouched.
+The ``--gpu-ids``, ``--jobs-per-gpu`` and ``--container-runtime`` flags override the run config's
+matching top-level keys for every iteration of one invocation, leaving the config file itself
+untouched. They reach Snakemake as ``--config`` entries, so each iteration's ``effective_config.yaml``
+is what records the values that pass ran with.
 """
 
 from __future__ import annotations
@@ -158,6 +161,42 @@ def _write_loop_overrides(
     return overrides
 
 
+def _write_effective_config(iter_input_dir: Path, config: dict, *, input_dir: str, output_dir: str) -> Path:
+    """Record the configuration one iteration is run with.
+
+    The verbatim copy of the run config beside this file records what the user supplied, but this
+    invocation's command-line overrides reach Snakemake through ``--config`` and would otherwise leave
+    no trace, so a loop launched with ``--gpu-ids all`` would be recorded as the cpu run its config file
+    still describes. It sits beside that copy rather than replacing it, so the pair records both.
+    ``_write_loop_overrides`` records the per-iteration deltas in the same directory.
+
+    Parameters
+    ----------
+    iter_input_dir : Path
+        The iteration's ``input/`` directory, where the seeded inputs and the loop overrides live too.
+    config : dict
+        Run config with this invocation's command-line overrides already applied.
+    input_dir, output_dir : str
+        This iteration's directories, replacing the base config's because they are the ones it used.
+
+    Returns
+    -------
+    Path
+        Path of the written config file.
+    """
+    recorded = {**config, "input_dir": input_dir, "output_dir": output_dir}
+    iter_input_dir.mkdir(parents=True, exist_ok=True)
+    effective = iter_input_dir / "effective_config.yaml"
+    effective.write_text(
+        "# Written by the loop driver. The run config with this invocation's command-line overrides\n"
+        "# applied and under this iteration's own directories. From iteration 2 the loop_overrides.yaml\n"
+        "# beside it layers the prescribed-profiles switch on top of this, and the verbatim copy of the\n"
+        "# run config alongside both records what the user supplied.\n"
+        + yaml.safe_dump(recorded, sort_keys=True)
+    )
+    return effective
+
+
 def run_forward_pass(
     *,
     target: str,
@@ -168,6 +207,7 @@ def run_forward_pass(
     repo_root: Path,
     extra_configfiles: list[Path] | None = None,
     extra_config: list[str] | None = None,
+    profile: str | None = None,
 ) -> None:
     """
     Run one Snakemake forward pass for an iteration.
@@ -180,12 +220,18 @@ def run_forward_pass(
     extra_config : list[str], optional
         Further ``key=value`` entries for the ``--config`` group (e.g. the GPU pool
         settings this invocation was given), taking precedence over every config file.
+    profile : str, optional
+        Snakemake profile directory (e.g. ``executors/htcondor/profiles/htcondor-gpu``). Sends the
+        iteration's jobs to a cluster executor instead of running them locally.
     """
     logger.info("Forward pass [%s]: snakemake %s --cores %d", output_dir, target, cores)
     # Extra config files are appended under the single --configfile flag. A second flag
     # occurrence would replace the first and silently drop the base config. Later files
     # take precedence in the deep merge, and --config key=value overrides apply last.
-    cmd = ["snakemake", target, "--cores", str(cores), "--configfile", str(config_path)]
+    cmd = ["snakemake", target, "--cores", str(cores)]
+    if profile:
+        cmd += ["--profile", profile]
+    cmd += ["--configfile", str(config_path)]
     cmd += [str(p) for p in (extra_configfiles or [])]
     cmd += ["--config", f"input_dir={input_dir}", f"output_dir={output_dir}", *(extra_config or [])]
     subprocess.run(cmd, cwd=repo_root, check=True)
@@ -206,6 +252,13 @@ def main() -> None:
                              "id list).")
     parser.add_argument("--jobs-per-gpu", type=int, default=None,
                         help="Override the config's jobs_per_gpu for every iteration.")
+    parser.add_argument("--profile", type=str, default=None,
+                        help="Snakemake profile directory passed to every iteration (e.g. "
+                             "executors/htcondor/profiles/htcondor-gpu to run on HTCondor).")
+    parser.add_argument("--container-runtime", type=str, default=None, choices=["docker", "apptainer"],
+                        help="Override the config's container_runtime for every iteration. A cluster "
+                             "profile normally needs 'apptainer', since the execute nodes have no "
+                             "Docker daemon.")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -223,21 +276,26 @@ def main() -> None:
             "and must not appear in the run config, where it would freeze stages already in iteration 1."
         )
 
-    # Validates the effective GPU settings before any iteration tree is created. yaml.safe_load turns "null" into
-    # None and "4" into an integer, while "all" and "4,5" stay strings.
+    # The run config with this invocation's command-line overrides applied. It both validates the GPU settings before
+    # any iteration tree is created and is recorded per iteration as what that pass ran with. yaml.safe_load turns
+    # "null" into None and "4" into an integer, while "all" and "4,5" stay strings.
     effective = dict(config)
     if args.gpu_ids is not None:
         effective["gpu_ids"] = yaml.safe_load(args.gpu_ids)
     if args.jobs_per_gpu is not None:
         effective["jobs_per_gpu"] = args.jobs_per_gpu
+    if args.container_runtime is not None:
+        effective["container_runtime"] = args.container_runtime
     resolve_gpu_settings(effective)
 
     # The flags are forwarded as raw text so snakemake re-parses each value exactly as a config file would.
-    gpu_overrides: list[str] = []
+    config_overrides: list[str] = []
     if args.gpu_ids is not None:
-        gpu_overrides.append(f"gpu_ids={args.gpu_ids}")
+        config_overrides.append(f"gpu_ids={args.gpu_ids}")
     if args.jobs_per_gpu is not None:
-        gpu_overrides.append(f"jobs_per_gpu={args.jobs_per_gpu}")
+        config_overrides.append(f"jobs_per_gpu={args.jobs_per_gpu}")
+    if args.container_runtime is not None:
+        config_overrides.append(f"container_runtime={args.container_runtime}")
 
     base_out = config["output_dir"]
     base_p = resolve_pipeline_paths(config)
@@ -269,12 +327,15 @@ def main() -> None:
         _seed_iteration_inputs(repo_root=repo_root, base_p=base_p, iter_p=iter_p,
                                s1_source=s1_source, s5_source=s5_source, config_path=config_path)
 
+        iter_input_dir = _abs(repo_root, iter_p["input_dir"])
+        _write_effective_config(iter_input_dir, effective, input_dir=iter_in, output_dir=iter_out)
         extra_configfiles = None if n == 1 else [
-            _write_loop_overrides(_abs(repo_root, iter_p["input_dir"]), rerun=rerun, reuse_output_dir=reuse_output_dir)
+            _write_loop_overrides(iter_input_dir, rerun=rerun, reuse_output_dir=reuse_output_dir)
         ]
         run_forward_pass(target=iter_p["s5_signal"], input_dir=iter_in, output_dir=iter_out,
                          cores=args.cores, config_path=config_path, repo_root=repo_root,
-                         extra_configfiles=extra_configfiles, extra_config=gpu_overrides or None)
+                         extra_configfiles=extra_configfiles, extra_config=config_overrides or None,
+                         profile=args.profile)
 
         prev_p = iter_p  # post-processing wrote both feedback artifacts; they seed iteration n+1
         signal = json.loads(_abs(repo_root, iter_p["s5_signal"]).read_text())
