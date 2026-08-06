@@ -8,8 +8,7 @@ version = "0.1.0"
 channels = ["conda-forge", "bioconda"]
 
 [feature.pipeline.dependencies]
-# Floor 9.16: the DAG dry-run test passes --runtime-source-cache-path, added in snakemake 9.16.
-snakemake-minimal = ">=9.16,<10"
+snakemake-minimal = "==9.24.0"
 graphviz = ">=9,<15"
 pytest = ">=8,<9"
 
@@ -23,6 +22,16 @@ cmd = "snakemake"
 default-environment = "pipeline"
 description = "Single forward pass, Stage 1 through Stage 5"
 
+[feature.htcondor.target.linux-64.pypi-dependencies]
+snakemake-executor-plugin-htcondor = "==0.3.0"
+
+[feature.htcondor-runtime]
+channels = ["conda-forge", "bioconda"]
+platforms = ["linux-64"]
+
+[feature.htcondor-runtime.dependencies]
+snakemake-minimal = "==9.24.0"
+
 [feature.test.dependencies]
 numpy = ">=2,<3"
 h5py = ">=3,<4"
@@ -34,5 +43,6 @@ pyyaml = ">=6,<7"
 cmd = "pytest -m 'not docker and not stage_env and not e2e' && pytest --doctest-modules src/utils/config_edit.py src/utils/paths.py src/io_contracts.py"
 
 [environments]
-pipeline = { features = ["pipeline"], no-default-feature = true }
-test = { features = ["pipeline", "test"], no-default-feature = true }
+pipeline = { features = ["pipeline", "htcondor"], no-default-feature = true }
+htcondor-runtime = { features = ["htcondor-runtime"], no-default-feature = true }
+test = { features = ["pipeline", "htcondor", "test"], no-default-feature = true }
