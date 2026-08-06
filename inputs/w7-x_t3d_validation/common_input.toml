@@ -7,8 +7,8 @@
 mode = "transport"
 
 [geometry]
-vmec_file = "../../outputs/w7-x_t3d_like/stage1_equilibrium/wout_w7x_t3d_reconstruction.nc"
-boozer_file = "../../outputs/w7-x_t3d_like/stage2_boozer/boozmn_w7x_t3d_reconstruction.nc"
+vmec_file = "../../outputs/w7-x_t3d_validation/stage1_equilibrium/wout_w7x_t3d_reconstruction.nc"
+boozer_file = "../../outputs/w7-x_t3d_validation/stage2_boozer/boozmn_w7x_t3d_reconstruction.nc"
 n_radial = 9
 rho_edge = 0.7
 
@@ -18,7 +18,7 @@ entropy_model = "none"
 
 [turbulence]
 flux_model = "fluxes_r_file"
-turbulence_file = "../../outputs/w7-x_t3d_like/stage4_turbulence/neopax_fluxes.h5"
+turbulence_file = "../../outputs/w7-x_t3d_validation/stage4_turbulence/neopax_fluxes.h5"
 # Build the turbulent flux response from the perturbed datasets Stage 4 writes under
 # response_mode = "fd_gradients". Options include:
 # "none": read the base fluxes only, leaving the perturbed datasets unused
@@ -134,5 +134,5 @@ transport_write_hdf5 = true
 transport_compare_ambipolarity_residual = false
 transport_scan_ambipolarity_residual = false
 transport_overlay_reference_er = false
-transport_output_dir = "../../outputs/w7-x_t3d_like/stage5_transport/"
+transport_output_dir = "../../outputs/w7-x_t3d_validation/stage5_transport/"
 transport_plot_n_times = 2

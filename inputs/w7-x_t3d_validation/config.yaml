@@ -13,8 +13,8 @@ gpu_ids: "all"
 jobs_per_gpu: 1
 
 
-input_dir: inputs/w7-x_t3d_like
-output_dir: outputs/w7-x_t3d_like
+input_dir: inputs/w7-x_t3d_validation
+output_dir: outputs/w7-x_t3d_validation
 
 # Input basenames (under input_dir); output basenames (under output_dir/stageN_<name>/).
 filenames:

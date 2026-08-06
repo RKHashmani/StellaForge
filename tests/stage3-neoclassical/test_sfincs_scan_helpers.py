@@ -111,7 +111,7 @@ def test_snapshot_species_density_ratios(module: ModuleType) -> None:
 
 
 def _w7x_like_profiles() -> dict:
-    """A 2-species [profiles] block in the per-species-array form used by inputs/w7-x_t3d_like."""
+    """A 2-species [profiles] block in the per-species-array form used by inputs/w7-x_t3d_validation."""
     return {
         "geometry": {"n_radial": 5, "rho_edge": 0.7},
         "profiles": {
