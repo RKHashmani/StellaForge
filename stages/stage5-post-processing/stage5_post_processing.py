@@ -109,11 +109,14 @@ def build_signal(transport: Path, *, rel_tol: float, turbulence_rtol: float, tur
         This pass's ``transport_solution.h5``.
     rel_tol : float
         Relative RMS tolerance forwarded to the convergence criterion.
+    turbulence_rtol, turbulence_atol : float
+        Relative and absolute scales of the ion-temperature drift metric behind ``rerun_stage4``.
 
     Returns
     -------
     dict
-        ``{"converged": bool, "halt": bool}``.
+        ``{"converged": bool, "halt": bool, "rerun_stage4": bool}``. A halt omits ``rerun_stage4``,
+        because a run whose equilibrium was not sustained has no meaningful drift to report.
     """
     for label, time_index, final_time in (("initial", 0, False), ("final", -1, True)):
         _, pressure, _ = _load_total_pressure(transport, time_index=time_index, final_time=final_time)
