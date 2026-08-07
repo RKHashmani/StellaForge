@@ -22,7 +22,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import time
 from pathlib import Path
 
 import yaml
@@ -181,18 +180,19 @@ def test_perturbed_surface_target_matches_run_one(tmp_path: Path) -> None:
 
 # With a real manifest on disk and its upstream equilibrium and Boozer outputs already present, the stage4_prepare
 # checkpoint is up to date, so a dry run expands its gather and schedules one stage4_run_one per manifest entry,
-# including the perturbed sibling. The dummy upstream outputs are written before the manifest and backdated so the
-# checkpoint output stays the newest of its inputs and never re-runs; the checkpoint's remaining config inputs
-# already live under inputs/quick_run/. Only the manifest basenames matter, so container-absolute run_dir paths work.
+# including the perturbed sibling. Every committed file the DAG consumes lives under inputs/quick_run/ and carries its
+# checkout mtime, so the dummy upstream outputs and the manifest are stamped strictly newer than all of them, in DAG
+# order, keeping every rule up to date however recently the repo was cloned. Only the manifest basenames matter, so
+# container-absolute run_dir paths work.
 def test_perturbed_manifest_expands_fan_out(tmp_path: Path) -> None:
     config = yaml.safe_load((REPO_ROOT / "inputs/quick_run/config.yaml").read_text())
     paths = resolve_pipeline_paths(config, output_dir=f"{tmp_path}/out")
+    newest_input = max(p.stat().st_mtime for p in (REPO_ROOT / paths["input_dir"]).rglob("*") if p.is_file())
     for key in ("s1_output", "s2_output"):
         artifact = Path(paths[key])
         artifact.parent.mkdir(parents=True, exist_ok=True)
         artifact.write_text("")
-        backdated = time.time() - 100
-        os.utime(artifact, (backdated, backdated))
+        os.utime(artifact, (newest_input + 100, newest_input + 100))
     manifest = Path(paths["stage4_manifest"])
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(
@@ -205,6 +205,7 @@ def test_perturbed_manifest_expands_fan_out(tmp_path: Path) -> None:
             }
         )
     )
+    os.utime(manifest, (newest_input + 200, newest_input + 200))
     result = _dry_run(tmp_path, targets=[paths["s4_output"]], config_overrides=[])
     output = result.stdout + result.stderr
     assert result.returncode == 0, output
