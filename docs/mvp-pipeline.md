@@ -15,7 +15,7 @@
                           |                              |
                           |    ┌────────────┐            |
                           +--->│  Stage 4   │            |
-                     wout_*.nc │ SPECTRAX-GK│            |
+                     wout_*.nc │    GKX     │            |
                                └─────┬──────┘            |
                                      |                   |
                               neopax_fluxes.h5           |
@@ -41,13 +41,13 @@ inputs/quick_run/
 ├── config.yaml                              # run config (paths, filenames, scan knobs)
 ├── vmec_input.HSX_vacuum_ns201_quickrun     # Stage 1 VMEC INDATA namelist
 ├── sfincs_input.HSX_vacuum_ns201_quickrun   # Stage 3 SFINCS namelist
-├── HSX_vacuum_ns201_quickrun.toml           # Stage 4 SPECTRAX-GK template
+├── HSX_vacuum_ns201_quickrun.toml           # Stage 4 GKX template
 └── common_input.toml                        # shared transport config (Stages 3, 4, 5)
 
 stages/
 ├── stage2-boozer/          run_boozer.py
 ├── stage3-neoclassical/    sfincs_jax_radial_scan.py
-├── stage4-turbulence/      spectrax_gk_radial_scan.py
+├── stage4-turbulence/      gkx_radial_scan.py
 └── stage5-post-processing/ fit_vmec_pressure_from_transport_h5.py, stage5_post_processing.py
 ```
 
@@ -191,7 +191,7 @@ pixi run --manifest-path stages/pixi.toml stage-3-sfincs-fortran
 
 ## Stage 4 -- Turbulence
 
-**Code:** SPECTRAX-GK
+**Code:** GKX
 
 | Direction | Format             | Location                                                                           |
 | --------- | ------------------ | ---------------------------------------------------------------------------------- |
@@ -206,23 +206,23 @@ pixi run --manifest-path stages/pixi.toml stage-3-sfincs-fortran
 ### How to Install
 
 ```
-pixi install --manifest-path stages/pixi.toml --environment stage-4-spectrax
+pixi install --manifest-path stages/pixi.toml --environment stage-4-gkx
 ```
 
 ### How to Run
 
 ```
-pixi run --manifest-path stages/pixi.toml stage-4-spectrax
+pixi run --manifest-path stages/pixi.toml stage-4-gkx
 ```
 
 which executes something morally equivalent to
 
 ```
-python -m spectraxgk.cli run --config inputs/quick_run/HSX_vacuum_ns201_quickrun.toml --out outputs/quick_run/stage4_turbulence/hsx_run
+python -m gkx.cli run --config inputs/quick_run/HSX_vacuum_ns201_quickrun.toml --out outputs/quick_run/stage4_turbulence/hsx_run_quickrun
 ```
 
 > [!NOTE]
-> The pixi `stage-4-spectrax` task runs the all-in-one radial scan, which fans one `python -m spectraxgk.cli run` subprocess out per flux surface; the command above is the underlying per-surface invocation.
+> The pixi `stage-4-gkx` task runs a **single** `gkx run` over the template TOML -- it is not the radial scan. The radial scan is the separate `stage-4-gkx-radial-scan` task, which fans one `python -m gkx.cli run` subprocess out per flux surface.
 
 ---
 
@@ -285,7 +285,7 @@ Stages 3 and 4 do not run as single jobs. Each expands into three rules that fan
 2. **`rule stageN_run_one`** -- one job and one container per surface. Stage 3 solves the surface and writes `runs/<surf>/result.json` (and `sfincsOutput.h5`); Stage 4 evolves it and writes `runs/<surf>/run.diagnostics.csv`.
 3. **`rule stageN_collect`** -- reduces every per-surface output into the stage's declared HDF5 (`sfincs_jax_flux_profiles.h5` / `neopax_fluxes.h5`).
 
-Which surfaces are scanned is driven by the `stage3.sfincs_jax` / `stage4.spectrax_gk` blocks in the run config (`analytical_n_radii` and the commented `num_radii` / `rho_min` / `rho_max` / `rho_indices` alternatives); see each stage's `spec.md`.
+Which surfaces are scanned is driven by the `stage3.sfincs_jax` / `stage4.gkx` blocks in the run config (`analytical_n_radii` and the commented `num_radii` / `rho_min` / `rho_max` / `rho_indices` alternatives); see each stage's `spec.md`.
 
 > [!NOTE]
 > `prepare` is a Snakemake `checkpoint` because the surface count can be data-dependent: with `profiles_source: transport_h5` the rho grid is read from a `transport_solution.h5` at run time. A dry run (`snakemake -n`) therefore plans only up to the checkpoints plus the deferred `collect` jobs; the per-surface `run_one` layer materializes only after `prepare` actually runs. Surface-level concurrency is `snakemake --cores`, one job per surface.
@@ -481,7 +481,7 @@ Each iteration runs as an independent Snakemake pass with `input_dir`/`output_di
 2. **Prescribes** the evolved kinetic profiles: it copies this pass's `common_input.toml` and replaces the whole `[profiles]` section with `model = "prescribed"` plus the density, temperature, and `Er` arrays of the transport solution's final time slice, writing the copy to a *declared* `profiles_feedback` output beside the evolved boundary (`write_prescribed_profiles_from_transport_h5.py ... --output-toml`). Everything outside `[profiles]` is copied through unchanged, so the result is a drop-in template for the next pass.
 3. **Checks convergence** (`stage5_post_processing.py`), writing `converge_status.json` alongside them.
 
-The driver chains iterations through both artifacts: it seeds iteration N+1's `input/` with iteration N's evolved boundary and its prescribed-profiles `common_input.toml`, re-seeding the Stage 3/4 configs and run config from the base each pass. From iteration 2 it also writes `loop_overrides.yaml` into that iteration's `input/`, setting `stage3.sfincs_jax.profiles_source` and `stage4.spectrax_gk.profiles_source` to `prescribed` so both stages read the seeded arrays instead of rebuilding analytical profiles. When [per-stage rerun flags](#per-stage-rerun-flags) freeze part of the pipeline, the same file also records the rerun map and the iteration 1 tree its artifacts are reused from, and the `prescribed` switch is written only for whichever of Stages 3 and 4 still rerun. That file is appended **after** the base run config under the single `--configfile` flag, which Snakemake deep-merges in order with later files taking precedence; a second `--configfile` occurrence would replace the first and silently drop the base config. Committed inputs and templates are never mutated; every artifact lives under `outputs/<run>/loop/`.
+The driver chains iterations through both artifacts: it seeds iteration N+1's `input/` with iteration N's evolved boundary and its prescribed-profiles `common_input.toml`, re-seeding the Stage 3/4 configs and run config from the base each pass. From iteration 2 it also writes `loop_overrides.yaml` into that iteration's `input/`, setting `stage3.sfincs_jax.profiles_source` and `stage4.gkx.profiles_source` to `prescribed` so both stages read the seeded arrays instead of rebuilding analytical profiles. When [per-stage rerun flags](#per-stage-rerun-flags) freeze part of the pipeline, the same file also records the rerun map and the iteration 1 tree its artifacts are reused from, and the `prescribed` switch is written only for whichever of Stages 3 and 4 still rerun. That file is appended **after** the base run config under the single `--configfile` flag, which Snakemake deep-merges in order with later files taking precedence; a second `--configfile` occurrence would replace the first and silently drop the base config. Committed inputs and templates are never mutated; every artifact lives under `outputs/<run>/loop/`.
 
 > [!NOTE]
 > From iteration 2 the Stage 3 scan therefore runs on the transport grid (`[geometry].n_radial` points, less the dropped magnetic-axis point, so 4 surfaces for quick_run) rather than the 51-point analytical grid `analytical_n_radii` requests, because the prescribed arrays exist only on the transport grid. This mirrors what `profiles_source: transport_h5` already does. Stage 4's quick-run grid is unchanged, since its `analytical_n_radii: null` already falls back to `[geometry].n_radial`.

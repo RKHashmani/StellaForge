@@ -4,11 +4,11 @@
 
 Stage 4 solves the gyrokinetic equations to compute turbulent transport. The primary outputs -- heat and particle fluxes -- are both optimization objectives (to minimize) AND direct transport inputs for Stage 5.
 
-**JAX-first priority:** `SPECTRAX-GK` is the primary code (JAX-native, differentiable). `GX` and `GENE` are traditional alternatives added later.
+**JAX-first priority:** `GKX` is the primary code (JAX-native, differentiable). `GX` and `GENE` are traditional alternatives added later.
 
 **Position in pipeline:** Receives geometry from Stage 1/2. Runs in parallel with Stage 3 (Neoclassical). Outputs feed Stage 5 (Transport).
 
-**Important coordination point:** The coupling between `SPECTRAX-GK` output and `NEOPAX` (Stage 5) is less mature than the `GX`-`Trinity3D` coupling. `NEOPAX` has turbulence-coupling utilities but the public examples focus on the neoclassical reduced model. The Stage 4 and 5 owners must coordinate on this interface.
+**Important coordination point:** The coupling between `GKX` output and `NEOPAX` (Stage 5) is less mature than the `GX`-`Trinity3D` coupling. `NEOPAX` has turbulence-coupling utilities but the public examples focus on the neoclassical reduced model. The Stage 4 and 5 owners must coordinate on this interface.
 
 Reference: `stellarator_workflow.tex`, Section 4.7; `stellarator_io_reference.tex`, Sections 3.9-3.10.
 
@@ -16,10 +16,12 @@ Reference: `stellarator_workflow.tex`, Section 4.7; `stellarator_io_reference.te
 
 ## Codes
 
-### SPECTRAX-GK (Primary JAX)
-- **Repository:** https://github.com/uwplasma/SPECTRAX-GK
+### GKX (Primary JAX)
+- **Repository:** https://github.com/uwplasma/GKX
 - **Language:** Python/JAX
 - **Role:** JAX-native gyrokinetic solver for differentiable turbulence calculations
+
+The upstream TeX manuscripts in the stellarator_workflow/ submodule still use the SPECTRAX-GK name.
 
 ### GX (Alternative)
 - **Repository:** https://bitbucket.org/gyrokinetics/gx
@@ -33,10 +35,10 @@ Reference: `stellarator_workflow.tex`, Section 4.7; `stellarator_io_reference.te
 
 ### Installation & Platform
 
-**`SPECTRAX-GK`:** Install via the Pixi environment. From the `stages`/ directory:
+**`GKX`:** Install via the Pixi environment. From the `stages`/ directory:
 
 ```
-pixi install --environment stage-4-spectrax
+pixi install --environment stage-4-gkx
 ```
 
 See `docs/mvp-pipeline.md` for run commands and I/O details.
@@ -50,7 +52,7 @@ See `docs/mvp-pipeline.md` for run commands and I/O details.
 
 Reference: `stellarator_io_reference.tex`, Sections 3.9-3.10.
 
-### SPECTRAX-GK Inputs
+### GKX Inputs
 
 | Field | Type | Description | Source |
 |-------|------|-------------|--------|
@@ -87,7 +89,7 @@ Optional input fields:
      - Defaults: `fixed_mode=False, iky_fixed=None, ikx_fixed=None, dealias_kz=False`
 
 > [!NOTE]
-> **Radial-scan bridge defaults and reproducibility.** The defaults listed above are the raw SPECTRAX-GK config defaults. The `spectrax_gk_radial_scan.py` bridge that the Snakemake forward pass runs generates a runtime TOML per flux surface rather than using the template verbatim, and its `prepare` shaping defaults differ: `nx = 12`, `ny = 12`, `ntheta = 30` (theta points for the generated VMEC geometry), `t_max = 10.0`, `sample_stride = 50`, `diagnostics_stride = 1` (these are also the values set in the `stage4.spectrax_gk` block of the quick-run config). The bridge does **not** emit `random_seed` into the generated TOMLs, so the SPECTRAX-GK default seed is left implicit and runs are not explicitly re-seeded through this path (a known reproducibility gap). The scan's `response_mode` defaults to `none`; in `fd_gradients` mode, unset `dkap_density` / `dkap_temperature` / `perturb_rel_step` each default to `0.5`.
+> **Radial-scan bridge defaults and reproducibility.** The defaults listed above are the raw GKX config defaults. The `gkx_radial_scan.py` bridge that the Snakemake forward pass runs generates a runtime TOML per flux surface rather than using the template verbatim, and its `prepare` shaping defaults differ: `nx = 12`, `ny = 12`, `ntheta = 30` (theta points for the generated VMEC geometry), `t_max = 10.0`, `sample_stride = 50`, `diagnostics_stride = 1` (these are also the values set in the `stage4.gkx` block of the quick-run config). The bridge does **not** emit `random_seed` into the generated TOMLs, so the GKX default seed is left implicit and runs are not explicitly re-seeded through this path (a known reproducibility gap). The scan's `response_mode` defaults to `none`; in `fd_gradients` mode, unset `dkap_density` / `dkap_temperature` / `perturb_rel_step` each default to `0.5`.
 
 ### `GX` Inputs (Alternative)
 
@@ -104,7 +106,7 @@ Installation-dependent. Key physics contract: geometry from VMEC/Boozer, species
 
 ### Input Validation
 
-> SPECTRAX-GK: Scripts check input fields and requirements located at tests/stage4-turbulence/SPECTRAX-GK/test_io.py.
+> GKX: Scripts check input fields and requirements located at tests/stage4-turbulence/GKX/test_io.py.
 
 ---
 
@@ -112,7 +114,7 @@ Installation-dependent. Key physics contract: geometry from VMEC/Boozer, species
 
 Reference: `stellarator_io_reference.tex`, Sections 3.9-3.10.
 
-### SPECTRAX-GK Outputs
+### GKX Outputs
 
 | Field | Type | Description | Used As | Normalization | Units | 
 |-------|------|-------------|---------|---------------|-------|
@@ -133,7 +135,7 @@ Output in CSV files, along with a json file that records the info for only last 
 
 #### Aggregated forward-pass outputs (radial scan)
 
-The Snakemake forward pass runs the SPECTRAX-GK radial scan as a per-surface fan-out (`stage4_prepare` checkpoint, one `stage4_run_one` job per flux surface, then `stage4_collect`; see [Per-surface fan-out](../mvp-pipeline.md#per-surface-fan-out-stages-3-and-4)). The `collect` step reduces the per-surface diagnostics into two HDF5 files.
+The Snakemake forward pass runs the GKX radial scan as a per-surface fan-out (`stage4_prepare` checkpoint, one `stage4_run_one` job per flux surface, then `stage4_collect`; see [Per-surface fan-out](../mvp-pipeline.md#per-surface-fan-out-stages-3-and-4)). The `collect` step reduces the per-surface diagnostics into two HDF5 files.
 
 **Forward-chain handoff:** `neopax_fluxes.h5` (HDF5), consumed by `NEOPAX` (Stage 5). Its schema is the exact subset checked by the in-repo contract validator `src/io_contracts.py` (`validate_neopax_fluxes`):
 
@@ -231,7 +233,7 @@ Reference: `stellarator_workflow.tex`, Section 4.7.
 
 ## Convergence & Validity
 
-> SPECTRAX-GK: Scripts checking convergence and stable flux located at tests/stage4-turbulence/SPECTRAX-GK/test_convergence_and_flux.py.
+> GKX: Scripts checking convergence and stable flux located at tests/stage4-turbulence/GKX/test_convergence_and_flux.py.
 ---
 
 ## API Documentation
@@ -243,23 +245,23 @@ Reference: `stellarator_workflow.tex`, Section 4.7.
 
 ## Scripts & Workflows
 
-**`SPECTRAX-GK` (via Pixi):** From the `stages`/ directory:
+**`GKX` (via Pixi):** From the `stages`/ directory:
 
 ```
-pixi run stage-4-spectrax
+pixi run stage-4-gkx
 ```
 
 which executes something morally equivalent to:
 
 ```
-python -m spectraxgk.cli run --config inputs/quick_run/HSX_vacuum_ns201_quickrun.toml --out outputs/quick_run/stage4_turbulence/hsx_run
+python -m gkx.cli run --config inputs/quick_run/HSX_vacuum_ns201_quickrun.toml --out outputs/quick_run/stage4_turbulence/hsx_run_quickrun
 ```
 
 > [!NOTE]
-> The pixi `stage-4-spectrax` task runs the all-in-one radial scan, which fans one `python -m spectraxgk.cli run` subprocess out per flux surface; the command above is the underlying per-surface invocation.
+> The pixi `stage-4-gkx` task runs a **single** `gkx run` over the template TOML -- it is not the radial scan. The radial scan is the separate `stage-4-gkx-radial-scan` task, which fans one `python -m gkx.cli run` subprocess out per flux surface.
 
 **Input:** `outputs/quick_run/stage1_equilibrium/wout_HSX_vacuum_ns201_quickrun.nc` + `inputs/quick_run/HSX_vacuum_ns201_quickrun.toml`
-**Output:** `outputs/quick_run/stage4_turbulence/neopax_fluxes.h5` (+ `flux_summary.h5`, `manifest.json`, `runs.csv`)
+**Output:** the `stage-4-gkx-radial-scan` collect step writes `outputs/quick_run/stage4_turbulence/neopax_fluxes.h5` (+ `flux_summary.h5`, `manifest.json`, `runs.csv`); the single-run task above writes under its own `--out` prefix.
 
 > [!NOTE]
 > The TOML's `vmec_file` points into `outputs/quick_run/stage1_equilibrium/`. Populate this directory by running `pixi run stage-1-vmec` first. The VMEC geometry path also requires `booz_xform_jax` at runtime (lazy dependency).
@@ -282,14 +284,14 @@ See `docs/mvp-pipeline.md` for full I/O details.
 
 ## Container Specification (Phase 2)
 
-**`SPECTRAX-GK`:** Built from the single templated `stages/Dockerfile` using build arguments:
+**`GKX`:** Built from the single templated `stages/Dockerfile` using build arguments:
 
 ```
-docker build --file stages/Dockerfile --build-arg ENVIRONMENT=stage-4-spectrax stages/        # CPU
-docker build --file stages/Dockerfile --build-arg ENVIRONMENT=stage-4-spectrax-gpu --build-arg CUDA_VERSION=12 stages/  # GPU
+docker build --file stages/Dockerfile --build-arg ENVIRONMENT=stage-4-gkx stages/        # CPU
+docker build --file stages/Dockerfile --build-arg ENVIRONMENT=stage-4-gkx-gpu --build-arg CUDA_VERSION=12 stages/  # GPU
 ```
 
-Published to GHCR as `ghcr.io/driftless-star/driftless-star:stage-4-spectrax-cpu` and `stage-4-spectrax-gpu`. CI builds via `.github/workflows/containers.yml`.
+Published to GHCR as `ghcr.io/driftless-star/driftless-star:stage-4-gkx-cpu` and `stage-4-gkx-gpu`. CI builds via `.github/workflows/containers.yml`.
 
 See [guide](../guide.md#container-architecture) for full architecture details.
 
@@ -299,7 +301,7 @@ See [guide](../guide.md#container-architecture) for full architecture details.
 ---
 
 ## Tests (Phase 2)
-- SPECTRAX-GK:
+- GKX:
     - Unit tests: Tests IO, convergence and stable flux.
     - Regression tests: [TODO]
     - Integration tests: [TODO]
@@ -310,5 +312,5 @@ See [guide](../guide.md#container-architecture) for full architecture details.
 ## Claude Skills
 
 > [!TODO]
-> Create dev, operational, and cross-stage Claude skills for SPECTRAX-GK and GX workflows.
+> Create dev, operational, and cross-stage Claude skills for GKX and GX workflows.
 > See [guide](../guide.md#step-7-create-claude-skills) for skill types.

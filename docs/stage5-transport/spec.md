@@ -12,12 +12,12 @@ solver).  `Trinity3D` is the traditional alternative with mature `GX`+`SFINCS`
 coupling.
 
 **Position in pipeline:** Receives neoclassical transport data from Stage 3 (`sfincs_jax`),
-turbulent fluxes from Stage 4 (`SPECTRAX-GK`), and geometry from Stage 1/2.
+turbulent fluxes from Stage 4 (`GKX`), and geometry from Stage 1/2.
 Produces the forward-pass output: updated $n(r)$, $T(r)$, $E_r(r)$,
 $P_\text{fus}$, $Q$.
 
 **Important note on `NEOPAX` turbulence coupling:** `NEOPAX` has
-turbulence-coupling utilities, but coupling `SPECTRAX-GK` turbulent flux into
+turbulence-coupling utilities, but coupling `GKX` turbulent flux into
 `NEOPAX` is a coordination point with the Stage 4 owner.  The alternative path
 (`GX` -> `Trinity3D`) has mature, tested turbulence coupling.
 

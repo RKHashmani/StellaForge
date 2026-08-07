@@ -1,14 +1,14 @@
 """Stage 4 (turbulence) shell-command composition for the Snakemake workflow.
 
-The Stage 4 SPECTRAX-GK radial-scan script accepts many optional flags; this
-module turns the user-facing ``config.yaml`` ``stage4.spectrax_gk`` block into
+The Stage 4 GKX radial-scan script accepts many optional flags; this
+module turns the user-facing ``config.yaml`` ``stage4.gkx`` block into
 the per-phase shell commands run by the Snakefile's ``stage4_prepare``
 checkpoint and its ``stage4_run_one``/``stage4_collect`` rules.
 """
 
 from __future__ import annotations
 
-_SCRIPT = "stages/stage4-turbulence/spectrax_gk_radial_scan.py"
+_SCRIPT = "stages/stage4-turbulence/gkx_radial_scan.py"
 _RELABEL_SCRIPT = "stages/stage4-turbulence/relabel_neopax_flux_radius.py"
 
 # Minor-radius conventions stage4.neopax_radius_relabel accepts, matching the script's own choices.
@@ -76,7 +76,7 @@ def prepare_cmd(
     stage_cfg: dict,
     output_dir: str,
 ) -> str:
-    """Compose the Stage 4 SPECTRAX-GK ``prepare`` shell command.
+    """Compose the Stage 4 GKX ``prepare`` shell command.
 
     Concretely: build the CLI arguments for the scan script's ``prepare``
     subcommand from ``stage_cfg`` and wrap them in a ``docker run`` invocation
@@ -88,9 +88,9 @@ def prepare_cmd(
     docker_prefix : str
         ``docker run ...`` prefix prepared by the Snakefile.
     image : str
-        Container image for Stage 4 (e.g. ``ghcr.io/.../stage-4-spectrax-cpu``).
+        Container image for Stage 4 (e.g. ``ghcr.io/.../stage-4-gkx-cpu``).
     stage_cfg : dict
-        The ``config.yaml`` ``stage4.spectrax_gk`` block.
+        The ``config.yaml`` ``stage4.gkx`` block.
     output_dir : str
         Stage 4 output directory (already ``{run_name}``-substituted).
 
@@ -98,14 +98,14 @@ def prepare_cmd(
     -------
     str
         A single-line ``prepare`` subcommand that writes the per-radius manifest
-        and SPECTRAX runtime TOMLs. ``{input.*}`` placeholders remain literal so
+        and GKX runtime TOMLs. ``{input.*}`` placeholders remain literal so
         Snakemake substitutes them at rule-execution time.
     """
     parts = [
         f"{docker_prefix} {image}",
         f"python {_SCRIPT} prepare",
         "--common-config {input.common_config}",
-        "--spectrax-template {input.config_file}",
+        "--gkx-template {input.config_file}",
         "--vmec-file-override {input.wout}",
         "--boozer-file-override {input.boozer}",
         f"--output-dir {output_dir}",
@@ -122,16 +122,16 @@ def run_one_cmd(
     output_dir: str,
     device: str,
 ) -> str:
-    """Compose the Stage 4 SPECTRAX-GK ``run-one`` shell command.
+    """Compose the Stage 4 GKX ``run-one`` shell command.
 
     Parameters
     ----------
     docker_prefix : str
         ``docker run ...`` prefix prepared by the Snakefile.
     image : str
-        Container image for Stage 4 (e.g. ``ghcr.io/.../stage-4-spectrax-cpu``).
+        Container image for Stage 4 (e.g. ``ghcr.io/.../stage-4-gkx-cpu``).
     stage_cfg : dict
-        The ``config.yaml`` ``stage4.spectrax_gk`` block.
+        The ``config.yaml`` ``stage4.gkx`` block.
     output_dir : str
         Stage 4 output directory (already ``{run_name}``-substituted).
     device : str
@@ -167,16 +167,16 @@ def collect_cmd(
     stage_cfg: dict,
     output_dir: str,
 ) -> str:
-    """Compose the Stage 4 SPECTRAX-GK ``collect`` shell command.
+    """Compose the Stage 4 GKX ``collect`` shell command.
 
     Parameters
     ----------
     docker_prefix : str
         ``docker run ...`` prefix prepared by the Snakefile.
     image : str
-        Container image for Stage 4 (e.g. ``ghcr.io/.../stage-4-spectrax-cpu``).
+        Container image for Stage 4 (e.g. ``ghcr.io/.../stage-4-gkx-cpu``).
     stage_cfg : dict
-        The ``config.yaml`` ``stage4.spectrax_gk`` block.
+        The ``config.yaml`` ``stage4.gkx`` block.
     output_dir : str
         Stage 4 output directory (already ``{run_name}``-substituted).
 
@@ -248,7 +248,7 @@ def relabel_cmd(
         ``docker run ...`` prefix prepared by the Snakefile. Rewriting one HDF5 dataset needs no
         GPU, so the caller passes the prefix that claims neither a GPU nor a scheduling slot.
     image : str
-        Container image for Stage 4 (e.g. ``ghcr.io/.../stage-4-spectrax-cpu``).
+        Container image for Stage 4 (e.g. ``ghcr.io/.../stage-4-gkx-cpu``).
     flux_file : str
         ``neopax_fluxes.h5`` to rewrite in place.
     wout : str

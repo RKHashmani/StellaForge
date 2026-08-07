@@ -26,8 +26,8 @@ def _load_toml_module() -> Any:
         except ModuleNotFoundError as exc:
             raise SystemExit("Need a TOML parser: install Python>=3.11 or `pip install tomli`") from exc
 
-from spectraxgk.config import GeometryConfig, GridConfig, InitializationConfig, TimeConfig
-from spectraxgk.runtime_config import (
+from gkx.config import GeometryConfig, GridConfig, InitializationConfig, TimeConfig
+from gkx.runtime_config import (
     RuntimeCollisionConfig,
     RuntimeExpertConfig,
     RuntimeNormalizationConfig,
@@ -104,7 +104,7 @@ def _validate_toml_schema(data: dict[str, Any]) -> dict[str, Any]:
     norm = dict(data)
 
     if "experts" in norm:
-        errors.append("Use [expert] (singular). [experts] is not valid in SPECTRAX-GK convention.")
+        errors.append("Use [expert] (singular). [experts] is not valid in GKX convention.")
 
     required_sections = ["species", "geometry", "physics", "run"]
     missing_required = [name for name in required_sections if name not in norm]
@@ -167,7 +167,7 @@ def _validate_toml_schema(data: dict[str, Any]) -> dict[str, Any]:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--config", type=Path, required=True, help="SPECTRAX-GK runtime TOML file to validate.")
+    p.add_argument("--config", type=Path, required=True, help="GKX runtime TOML file to validate.")
     p.add_argument(
         "--out",
         type=Path,

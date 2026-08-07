@@ -29,9 +29,9 @@ from typing import Any
 
 import numpy as np
 
-from spectraxgk.io import load_runtime_from_toml
-from spectraxgk.runtime import RuntimeNonlinearResult, run_runtime_nonlinear
-from spectraxgk.runtime_artifacts import write_runtime_nonlinear_artifacts
+from gkx.io import load_runtime_from_toml
+from gkx.runtime import RuntimeNonlinearResult, run_runtime_nonlinear
+from gkx.runtime_artifacts import write_runtime_nonlinear_artifacts
 
 
 def _parse_scales(value: str) -> list[float]:
