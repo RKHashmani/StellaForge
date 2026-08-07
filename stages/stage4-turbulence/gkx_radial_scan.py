@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""NEOPAX -> SPECTRAX-GK radial flux-scan driver (Stage 4 turbulence).
+"""NEOPAX -> GKX radial flux-scan driver (Stage 4 turbulence).
 
-Self-contained NEOPAX-facing entrypoint for the NEOPAX <-> SPECTRAX-GK
+Self-contained NEOPAX-facing entrypoint for the NEOPAX <-> GKX
 coupling. It reads a NEOPAX transport TOML (and, optionally, its transport
 HDF5 output) and, across a set of radii:
 
-- prepares the per-radius SPECTRAX-GK runs (manifest + runtime TOMLs),
+- prepares the per-radius GKX runs (manifest + runtime TOMLs),
 - executes them in parallel,
 - collects the final nonlinear heat / particle fluxes into a single HDF5
   file in NEOPAX units.
@@ -15,9 +15,9 @@ pipeline (``cmd_all``). The hidden ``run-one`` subcommand executes a single
 radius and is used internally by the parallel launcher (one worker process
 per run); it is not intended for direct use.
 
-This module was formed by merging the former
-``neopax_spectrax_flux_bridge`` helper into this driver so the Stage-4
-radial scan lives in a single self-contained file.
+This module was formed by merging the former NEOPAX flux-bridge helper
+into this driver so the Stage-4 radial scan lives in a single
+self-contained file.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 STAGES_DIR = SCRIPT_DIR.parent
 
 DEFAULT_COMMON_CONFIG = STAGES_DIR.parent / "inputs" / "quick_run" / "common_input.toml"
-DEFAULT_SPECTRAX_TEMPLATE = STAGES_DIR.parent / "inputs" / "quick_run" / "HSX_vacuum_ns201_quickrun.toml"
+DEFAULT_GKX_TEMPLATE = STAGES_DIR.parent / "inputs" / "quick_run" / "HSX_vacuum_ns201_quickrun.toml"
 DEFAULT_OUTPUT_DIR = STAGES_DIR.parent / "outputs" / "quick_run" / "stage4_turbulence"
 DEFAULT_FD_PERTURB_REL_STEP = 0.5
 DEFAULT_FD_DKAP_DENSITY = 0.5
@@ -698,7 +698,7 @@ def _build_manifest(
     if density.shape[0] != len(species) or temperature.shape[0] != len(species):
         raise ValueError("NEOPAX HDF5 species dimension does not match the species list from the TOML")
 
-    template_path = _resolve_template_path(getattr(args, "spectrax_template", None), common_config.resolve().parent)
+    template_path = _resolve_template_path(getattr(args, "gkx_template", None), common_config.resolve().parent)
     template_cfg = _maybe_load_toml(template_path)
     template_grid = _template_section(template_cfg, "grid")
     template_time = _template_section(template_cfg, "time")
@@ -987,7 +987,7 @@ def _build_manifest(
         "output_dir": str(output_dir.resolve()),
         "snapshot_time": snapshot.time_value,
         "electron_model": str(electron_model_value).lower(),
-        "spectrax_template": None if template_path is None else str(template_path),
+        "gkx_template": None if template_path is None else str(template_path),
         "response_mode": response_mode,
         "perturb_density_species": perturb_density_species,
         "perturb_temperature_species": perturb_temperature_species,
@@ -1214,11 +1214,11 @@ def _write_normalization_audit(output_dir: Path, manifest: dict[str, Any]) -> No
 def cmd_prepare(args: argparse.Namespace) -> int:
     common_config = Path(args.common_config).resolve()
     output_dir = Path(args.output_dir).resolve()
-    # Anchor a relative --spectrax-template at the invocation CWD like every other CLI path
+    # Anchor a relative --gkx-template at the invocation CWD like every other CLI path
     # argument; the template resolver downstream would otherwise anchor it at the
     # common-config directory and mangle CWD-relative values.
-    if args.spectrax_template:
-        args.spectrax_template = str(Path(args.spectrax_template).resolve())
+    if args.gkx_template:
+        args.gkx_template = str(Path(args.gkx_template).resolve())
 
     cfg = _load_toml(common_config)
     species = _parse_species_from_common_config(cfg)
@@ -1276,7 +1276,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         source_label = "prescribed profiles from TOML"
     else:
         source_label = "analytical profiles from TOML"
-    print(f"Prepared {len(manifest['runs'])} SPECTRAX-GK runs from {source_label}")
+    print(f"Prepared {len(manifest['runs'])} GKX runs from {source_label}")
     return 0
 
 
@@ -1310,7 +1310,7 @@ def _apply_backend_env(
     gpu_id: int | str | None,
     threads_per_run: int | None,
 ) -> dict[str, str]:
-    # SPECTRAX workers pick their JAX device and thread count from these variables. The parallel
+    # GKX workers pick their JAX device and thread count from these variables. The parallel
     # launcher and the single-run worker both route through here so a CPU/GPU slot is configured the
     # same way no matter which path started the run. A missing GPU id maps to device 0 and a missing
     # CPU thread count maps to a single thread, matching the launcher's per-slot defaults.
@@ -1383,7 +1383,7 @@ def cmd_run_one(args: argparse.Namespace) -> int:
     cmd = [
         sys.executable,
         "-m",
-        "spectraxgk.cli",
+        "gkx.cli",
         "run",
         "--config",
         str(config_path),
@@ -1411,7 +1411,7 @@ def cmd_run_one(args: argparse.Namespace) -> int:
     summary_json = _summary_json_path(run_spec)
     if not diag_csv.exists():
         message = (
-            "SPECTRAX worker exited successfully but did not write the expected "
+            "GKX worker exited successfully but did not write the expected "
             f"diagnostics file: {diag_csv}"
         )
         if summary_json.exists():
@@ -1644,7 +1644,7 @@ def _write_summary_plots(
             ax.plot(rho, values[i], marker="o", linewidth=1.5, markersize=4.0, label=name)
         ax.set_xlabel("rho")
         ax.set_ylabel(label)
-        ax.set_title(f"{label} from SPECTRAX radial scan")
+        ax.set_title(f"{label} from GKX radial scan")
         ax.grid(True, alpha=0.3)
         ax.legend()
         fig.savefig(path, dpi=180)
@@ -1712,7 +1712,7 @@ def _thermal_speed_ms(temperature_keV: float, mass_mp: float) -> float:
     return float(np.sqrt(2.0 * temp_eV * elementary_charge / mass_kg))
 
 
-def _spectrax_flux_to_neopax_units(
+def _gkx_flux_to_neopax_units(
     flux_gb: float,
     *,
     density_ref_state: float,
@@ -1874,7 +1874,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
                 continue
             heat_flux_species[i, full_idx] = row.get(f"heat_flux_s{runtime_idx}", 0.0)
             particle_flux_species[i, full_idx] = row.get(f"particle_flux_s{runtime_idx}", 0.0)
-            q_neopax[full_idx, i] = _spectrax_flux_to_neopax_units(
+            q_neopax[full_idx, i] = _gkx_flux_to_neopax_units(
                 heat_flux_species[i, full_idx],
                 density_ref_state=float(ref_runtime_species["density_reference_physical"]),
                 temperature_ref_keV=float(ref_runtime_species["temperature_reference_physical"]),
@@ -1882,7 +1882,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
                 rho_star_physical=rho_star_physical,
                 kind="Q",
             )
-            gamma_neopax[full_idx, i] = _spectrax_flux_to_neopax_units(
+            gamma_neopax[full_idx, i] = _gkx_flux_to_neopax_units(
                 particle_flux_species[i, full_idx],
                 density_ref_state=float(ref_runtime_species["density_reference_physical"]),
                 temperature_ref_keV=float(ref_runtime_species["temperature_reference_physical"]),
@@ -2100,15 +2100,15 @@ def cmd_all(args: argparse.Namespace) -> int:
             else _default_transport_solution_path(config_path, cfg)
         )
     output_dir = Path(args.output_dir).resolve()
-    spectrax_template = (
-        str(Path(args.spectrax_template).resolve()) if args.spectrax_template else None
+    gkx_template = (
+        str(Path(args.gkx_template).resolve()) if args.gkx_template else None
     )
 
     prepare_args = argparse.Namespace(
         profiles_source=args.profiles_source,
         neopax_result=None if result_path is None else str(result_path),
         common_config=str(config_path),
-        spectrax_template=spectrax_template,
+        gkx_template=gkx_template,
         output_dir=str(output_dir),
         time_index=args.time_index,
         analytical_n_radii=args.analytical_n_radii,
@@ -2196,7 +2196,7 @@ def cmd_all(args: argparse.Namespace) -> int:
         return rc
     if run_failed:
         print(
-            "warning: one or more SPECTRAX runs failed; continuing to collect "
+            "warning: one or more GKX runs failed; continuing to collect "
             "available outputs and zero-filling missing runs.",
             file=sys.stderr,
         )
@@ -2226,12 +2226,12 @@ def _add_common_io_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--output-dir",
         default=str(DEFAULT_OUTPUT_DIR),
-        help="Directory for manifest, SPECTRAX outputs, and collected fluxes",
+        help="Directory for manifest, GKX outputs, and collected fluxes",
     )
     parser.add_argument(
-        "--spectrax-template",
-        default=str(DEFAULT_SPECTRAX_TEMPLATE),
-        help="Base SPECTRAX runtime TOML used as the model template",
+        "--gkx-template",
+        default=str(DEFAULT_GKX_TEMPLATE),
+        help="Base GKX runtime TOML used as the model template",
     )
 
 
@@ -2273,7 +2273,7 @@ def _add_prepare_shaping_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--fixed-dt", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--sample-stride", type=int, default=50)
     parser.add_argument("--diagnostics-stride", type=int, default=1)
-    parser.add_argument("--chunk-steps", type=int, default=None, help="Adaptive nonlinear chunk size in steps for each SPECTRAX run")
+    parser.add_argument("--chunk-steps", type=int, default=None, help="Adaptive nonlinear chunk size in steps for each GKX run")
     parser.add_argument("--cfl", type=float, default=None)
     parser.add_argument("--state-sharding", default=None)
     parser.add_argument("--ky", type=float, default=None, help="Default nonlinear reference ky retained unless overridden")
@@ -2376,13 +2376,13 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
         "--verbose-workers",
         dest="verbose_workers",
         action="store_true",
-        help="Show the stdout/stderr from each SPECTRAX worker run",
+        help="Show the stdout/stderr from each GKX worker run",
     )
     parser.add_argument(
         "--no-verbose-workers",
         dest="verbose_workers",
         action="store_false",
-        help="Silence SPECTRAX worker stdout/stderr.",
+        help="Silence GKX worker stdout/stderr.",
     )
     parser.set_defaults(verbose_workers=True)
 
@@ -2403,7 +2403,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = p.add_subparsers(dest="cmd", required=False)
 
-    prepare = sub.add_parser("prepare", help="Build the per-radius manifest and SPECTRAX runtime TOMLs.")
+    prepare = sub.add_parser("prepare", help="Build the per-radius manifest and GKX runtime TOMLs.")
     _add_common_io_args(prepare)
     _add_prepare_shaping_args(prepare)
     prepare.set_defaults(func=cmd_prepare)

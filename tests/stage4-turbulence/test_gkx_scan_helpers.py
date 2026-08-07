@@ -1,9 +1,9 @@
-"""Tests for the Stage 4 SPECTRAX-GK radial-scan helpers.
+"""Tests for the Stage 4 GKX radial-scan helpers.
 
-These reuse the pure functions from ``spectrax_gk_radial_scan.py``, loaded by path.
-``_spectrax_flux_to_neopax_units`` converts a gyro-Bohm flux to NEOPAX physical
+These reuse the pure functions from ``gkx_radial_scan.py``, loaded by path.
+``_gkx_flux_to_neopax_units`` converts a gyro-Bohm flux to NEOPAX physical
 units; ``_expand_axis_zero_if_needed`` prepends the magnetic-axis radius (rho=0,
-zero flux) when the scan skipped it. SPECTRAX-GK runs via subprocess, so loading
+zero flux) when the scan skipped it. GKX runs via subprocess, so loading
 the module and calling these helpers needs no solver.
 """
 
@@ -22,19 +22,19 @@ from scipy.constants import elementary_charge, proton_mass
 
 from tests.helpers.stage_import import load_stage_module
 
-scan = load_stage_module("stages/stage4-turbulence/spectrax_gk_radial_scan.py")
+scan = load_stage_module("stages/stage4-turbulence/gkx_radial_scan.py")
 
 
-# --- _spectrax_flux_to_neopax_units ---
+# --- _gkx_flux_to_neopax_units ---
 
-# `_spectrax_flux_to_neopax_units` converts a dimensionless (gyro-Bohm) flux into physical units. The heat flux Q
+# `_gkx_flux_to_neopax_units` converts a dimensionless (gyro-Bohm) flux into physical units. The heat flux Q
 # carries one extra factor of temperature (in eV) compared to the particle flux Gamma. Converting the same raw value
 # both ways, this asserts their ratio Q/Gamma equals the temperature expressed in eV (2 keV = 2000 eV), a cheap way to
 # check the extra-temperature factor without pinning the full absolute scale.
 def test_flux_units_q_over_gamma_is_temperature_in_ev() -> None:
     kwargs = dict(density_ref_state=0.5, temperature_ref_keV=2.0, mass_ref_mp=2.0, rho_star_physical=0.01)
-    gamma = scan._spectrax_flux_to_neopax_units(3.0, kind="Gamma", **kwargs)
-    q = scan._spectrax_flux_to_neopax_units(3.0, kind="Q", **kwargs)
+    gamma = scan._gkx_flux_to_neopax_units(3.0, kind="Gamma", **kwargs)
+    q = scan._gkx_flux_to_neopax_units(3.0, kind="Q", **kwargs)
     assert_allclose(q / gamma, 2.0 * 1.0e3, rtol=1e-12)  # Q carries an extra factor of T expressed in eV
 
 
@@ -49,7 +49,7 @@ def test_flux_units_absolute_scale_matches_reference_convention() -> None:
     # tests below cannot see a silent drift in this overall unit convention.
     vth_ref = np.sqrt(2.0 * 2000.0 * elementary_charge / (2.0 * proton_mass))
     expected_gamma = 3.0 * 0.5e20 * vth_ref * 1.0e-4
-    gamma = scan._spectrax_flux_to_neopax_units(
+    gamma = scan._gkx_flux_to_neopax_units(
         3.0, density_ref_state=0.5, temperature_ref_keV=2.0, mass_ref_mp=2.0, rho_star_physical=0.01, kind="Gamma"
     )
     assert_allclose(gamma, expected_gamma, rtol=1e-12)
@@ -59,14 +59,14 @@ def test_flux_units_absolute_scale_matches_reference_convention() -> None:
 # 2x (0.01 vs 0.02), this asserts the results differ by 4x (2 squared), confirming the rho_star-squared dependence.
 def test_flux_units_scale_as_rho_star_squared() -> None:
     base = dict(density_ref_state=1.0, temperature_ref_keV=1.0, mass_ref_mp=1.0, kind="Gamma")
-    small = scan._spectrax_flux_to_neopax_units(1.0, rho_star_physical=0.01, **base)
-    large = scan._spectrax_flux_to_neopax_units(1.0, rho_star_physical=0.02, **base)
+    small = scan._gkx_flux_to_neopax_units(1.0, rho_star_physical=0.01, **base)
+    large = scan._gkx_flux_to_neopax_units(1.0, rho_star_physical=0.02, **base)
     assert_allclose(large / small, 4.0, rtol=1e-12)  # gyro-Bohm scaling goes as rho_star^2
 
 
 def test_flux_units_unknown_kind_raises() -> None:
     with pytest.raises(ValueError):
-        scan._spectrax_flux_to_neopax_units(
+        scan._gkx_flux_to_neopax_units(
             1.0, density_ref_state=1.0, temperature_ref_keV=1.0, mass_ref_mp=1.0, rho_star_physical=0.01, kind="bogus"
         )
 

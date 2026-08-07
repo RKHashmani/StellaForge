@@ -35,7 +35,7 @@ def _disabled_configfile(tmp_path: Path) -> str:
 def _collect_shell_line(output: str) -> str:
     """Return the planned shell command for stage4_collect."""
     for line in output.splitlines():
-        if line.startswith("Shell command:") and "spectrax_gk_radial_scan.py collect" in line:
+        if line.startswith("Shell command:") and "gkx_radial_scan.py collect" in line:
             return line
     raise AssertionError(f"no stage4_collect shell command planned:\n{output}")
 
@@ -78,7 +78,7 @@ def test_both_commands_are_grouped_before_the_log_pipe(tmp_path: Path) -> None:
     assert body.startswith("( "), body
     grouped, _, piped = body.partition(" ) 2>&1 | tee ")
     assert piped, f"the grouped commands must be piped to the log as a unit: {body}"
-    assert "spectrax_gk_radial_scan.py collect" in grouped, grouped
+    assert "gkx_radial_scan.py collect" in grouped, grouped
     assert _RELABEL_SCRIPT in grouped, grouped
 
 

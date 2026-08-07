@@ -67,11 +67,11 @@ def test_choose_radius_empty_filter_raises() -> None:
 # _build_standard_analytical_snapshot. Running the snapshot tests against both copies
 # guards against the duplicated helpers silently drifting apart. The Stage 4 module is
 # also loaded by the Stage 4 test file; load_stage_module caches by file, so this reuses it.
-spectrax_scan = load_stage_module("stages/stage4-turbulence/spectrax_gk_radial_scan.py")
+gkx_scan = load_stage_module("stages/stage4-turbulence/gkx_radial_scan.py")
 
 SNAPSHOT_MODULES = [
     pytest.param(scan, id="sfincs_jax"),
-    pytest.param(spectrax_scan, id="spectrax_gk"),
+    pytest.param(gkx_scan, id="gkx"),
 ]
 
 

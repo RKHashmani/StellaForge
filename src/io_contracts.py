@@ -16,7 +16,7 @@ heavy I/O libraries present.
 
 Contracts are built to the reader/writer code, not the spec docs, wherever in-repo code
 defines them. The two NetCDF files are read by upstream stages and also in-repo by the
-Stage 4 radial scan (stages/stage4-turbulence/spectrax_gk_radial_scan.py), which reads the
+Stage 4 radial scan (stages/stage4-turbulence/gkx_radial_scan.py), which reads the
 wout minor-radius scalars and the boozmn bmnc_b/ixm_b/ixn_b coefficients; their subsets
 follow the documented handoff, the mode-number arrays their coefficients are indexed by,
 and those in-repo reads.

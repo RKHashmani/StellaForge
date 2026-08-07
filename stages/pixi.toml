@@ -72,7 +72,7 @@ gkx = ">=1.7.1,<2"
 cmd = "gkx run --config ../inputs/quick_run/HSX_vacuum_ns201_quickrun.toml --out ../outputs/quick_run/stage4_turbulence/hsx_run_quickrun"
 
 [feature.gkx.tasks.stage-4-gkx-radial-scan]
-cmd = "python stage4-turbulence/spectrax_gk_radial_scan.py"
+cmd = "python stage4-turbulence/gkx_radial_scan.py"
 
 [feature.neopax.dependencies]
 scipy = ">=1.17.1,<2"
