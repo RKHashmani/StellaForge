@@ -108,6 +108,11 @@ stage4:
     ntheta: 30
     t_max: 10.0
     average_window: 1.0
+    # Reduction applied to each diagnostic's time trace at collect.
+    # Options include:
+    # "window_mean": mean over the final average_window of the trace, used when the key is absent
+    # "t3d_median": median of the trailing medians, matching Trinity3D's estimator
+    # average_reducer: "window_mean"
     sample_stride: 50
     diagnostics_stride: 1
 
