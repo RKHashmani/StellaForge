@@ -151,7 +151,7 @@ if REUSE_OUTPUT_DIR is not None:
         S4_OUTPUT = P_REUSE["s4_output"]
 
 STAGE3_CFG = config["stage3"]["sfincs_jax"]
-STAGE4_CFG = config["stage4"]["spectrax_gk"]
+STAGE4_CFG = config["stage4"]["gkx"]
 # Resolved here rather than beside its rule so a misspelled convention is caught even when the run freezes Stage 4.
 RADIUS_RELABEL_CONVENTION = stage4_helper.resolve_radius_relabel(config)
 

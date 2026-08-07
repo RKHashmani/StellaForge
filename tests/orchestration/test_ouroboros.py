@@ -215,7 +215,7 @@ def test_loop_passes_prescribed_overrides_from_second_iteration(
     assert len(extras[1]) == 1
     overrides = yaml.safe_load(extras[1][0].read_text())
     assert overrides["stage3"]["sfincs_jax"]["profiles_source"] == "prescribed"
-    assert overrides["stage4"]["spectrax_gk"]["profiles_source"] == "prescribed"
+    assert overrides["stage4"]["gkx"]["profiles_source"] == "prescribed"
     assert "loop" not in overrides
     # The overrides file lives inside the iteration's input dir, alongside the seeded inputs.
     assert str(extras[1][0]).startswith(f"{tmp_path}/out/loop/iter_2/input")
@@ -377,7 +377,7 @@ def test_overrides_carry_rerun_flags_and_the_reuse_tree(monkeypatch: pytest.Monk
     overrides = _overrides_of_second_iteration(monkeypatch, config_path)
 
     assert overrides["stage3"]["sfincs_jax"]["profiles_source"] == "prescribed"
-    assert overrides["stage4"]["spectrax_gk"]["profiles_source"] == "prescribed"
+    assert overrides["stage4"]["gkx"]["profiles_source"] == "prescribed"
     assert overrides["loop"]["rerun"] == {
         "stage1": False, "stage2": False, "stage3": True, "stage4": True, "stage5": True,
     }
@@ -395,7 +395,7 @@ def test_overrides_omit_the_prescribed_switch_for_a_frozen_stage(
     overrides = _overrides_of_second_iteration(monkeypatch, config_path)
 
     assert "stage3" not in overrides
-    assert overrides["stage4"]["spectrax_gk"]["profiles_source"] == "prescribed"
+    assert overrides["stage4"]["gkx"]["profiles_source"] == "prescribed"
     assert overrides["loop"]["rerun"]["stage3"] is False
     assert overrides["loop"]["reuse_output_dir"] == f"{tmp_path}/out/loop/iter_1/output"
 
@@ -408,7 +408,7 @@ def test_write_loop_overrides_defaults_to_the_prescribed_switch_only(tmp_path: P
 
     assert yaml.safe_load(path.read_text()) == {
         "stage3": {"sfincs_jax": {"profiles_source": "prescribed"}},
-        "stage4": {"spectrax_gk": {"profiles_source": "prescribed"}},
+        "stage4": {"gkx": {"profiles_source": "prescribed"}},
     }
 
 
