@@ -50,6 +50,18 @@ def test_root_mode_plans_the_root_flag_on_every_launch(tmp_path: Path) -> None:
     assert HOST_USER_FLAG not in output, output
 
 
+# Generated ConStellaration runs default to /staging, outside the repository bind at /work. Every container must
+# therefore receive the absolute output root as a same-path bind mount. The shared dry-run helper already overrides
+# output_dir to an absolute tmp path, so this pins the external-run behavior without touching /staging.
+def test_absolute_run_root_is_bound_on_every_launch(tmp_path: Path) -> None:
+    result = _dry_run(tmp_path, targets=[], config_overrides=["docker_user=root"], printshellcmds=True)
+    output = result.stdout + result.stderr
+    bind_flag = f"-v {tmp_path}/out:{tmp_path}/out"
+    assert result.returncode == 0, output
+    assert output.count("docker run") > 0, output
+    assert output.count(bind_flag) == output.count("docker run"), output
+
+
 # A mistyped mode must be caught while the DAG is being built, before any job runs, and the message must name the
 # value, so the failure is actionable rather than surfacing hours later as an unreadable bind mount.
 def test_malformed_mode_fails_at_parse_naming_the_value(tmp_path: Path) -> None:

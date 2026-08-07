@@ -146,6 +146,75 @@ cp -r inputs/quick_run inputs/my_run
 pixi run driftless-star-fwd --configfile inputs/my_run/config.yaml --cores 4
 ```
 
+### Generate runs from the ConStellaration dataset
+
+Generate one quick-run input folder per ConStellaration `plasma_config_id`. Rows
+are read through the Hugging Face Dataset Viewer API in pages, so this does not
+download the full dataset. The default root is
+`/staging/groups/driftless_star/constellaration_runs`, giving each ID the layout
+`inputs/<plasma_config_id>/config.yaml` and `outputs/<plasma_config_id>/`:
+
+```
+# First 10 rows (the default limit is 1)
+pixi run constellaration-generate --limit 10
+
+# Exact IDs, or use --ids-file ids.txt
+pixi run constellaration-generate --id DGDvAUqji95R8kRxZmucCg6 --id DN4iUQNyzJ25VxSzdewLE9r
+```
+
+Every generated folder contains its VMEC boundary, Stage 3/4/5 quick-run
+templates, dataset provenance, and a standalone run config with absolute paths.
+Use `--output-root PATH` to generate elsewhere and `--overwrite` to refresh
+existing generated inputs. A public dataset needs no credentials; if a custom
+dataset is gated, set `HF_TOKEN` in the environment.
+
+Launch every generated config sequentially (or repeat `--id` to select a
+subset):
+
+```
+pixi run constellaration-launch --cores 4
+pixi run constellaration-launch --dry-run --id DGDvAUqji95R8kRxZmucCg6
+```
+
+The launcher performs one forward pass by default. Add `--loop-iters 3` for the
+closed-loop driver, or `--profile executors/htcondor/profiles/htcondor-gpu` to
+dispatch through the repository's HTCondor profile.
+
+For production HTCondor batches, use the root-level wrapper:
+
+```bash
+./run/constellaration_generation.sh --all
+```
+
+It generates the next 100 dataset configs, keeps up to ten configs active at
+once, runs each through up to ten closed-loop iterations with the GPU HTCondor
+profile, archives the batch, and repeats until the full dataset split is
+finished. The final archive may contain fewer than 100 configs. Progress is
+written atomically to
+`/staging/groups/driftless_star/constellaration_runs/manifest.json`. Run states
+are `pending`, `running`, `succeeded`, `failed`, `interrupted`, or `archived`;
+the manifest also records attempts, exit codes, dataset row indices, batch
+membership, and config IDs. If a run fails or the driver is interrupted, invoke
+the same script again to resume the unfinished batch rather than generating a
+new one.
+
+After every run in a batch succeeds, the driver creates and verifies `run1.tar`,
+`run2.tar`, and so on in the run root. Each tar contains that batch's
+`inputs/<id>/` and `outputs/<id>/` trees. Only after verification does it remove
+those loose trees to reduce the staging file count; `manifest.json` remains
+available as the index. Caller arguments override wrapper defaults, for example:
+
+```bash
+# Small two-config test batch, one forward pass
+./run/constellaration_generation.sh --batch-size 2 --loop-iters 0
+
+# Explicit IDs instead of the next dataset slice
+./run/constellaration_generation.sh --id DGDvAUqji95R8kRxZmucCg6 --id DN4iUQNyzJ25VxSzdewLE9r
+```
+
+See [`run/README.md`](run/README.md) for the complete batch lifecycle,
+manifest format, restart behavior, and archive restoration instructions.
+
 ### Run on GPUs
 
 Two top-level run-config keys pick the `-gpu` image variant for every stage and the device pool its containers may use:
