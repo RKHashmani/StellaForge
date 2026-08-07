@@ -89,7 +89,7 @@ Each job's `.err` opens with `[job_wrapper]` diagnostics naming the Snakemake it
 
 ## Further Explanation
 
-The parent image built from `apptainer.def` exists only to give remote HTCondor jobs a stable runtime. Inside it, the workflow launches the stage-specific images for VMEC, BOOZ_XFORM, SFINCS, SPECTRAX-GK, and NEOPAX.
+The parent image built from `apptainer.def` exists only to give remote HTCondor jobs a stable runtime. Inside it, the workflow launches the stage-specific images for VMEC, BOOZ_XFORM, SFINCS, GKX, and NEOPAX.
 
 So the layering is:
 

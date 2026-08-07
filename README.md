@@ -37,7 +37,7 @@ Stages 3 and 4 run in parallel. Each stage should eventually be independently sw
 | 1. Equilibrium | Ideal-MHD force balance | [vmec_jax](https://github.com/uwplasma/vmec_jax), [DESC](https://github.com/PlasmaControl/DESC) | [VMEC++](https://github.com/proximafusion/vmecpp) |
 | 2. Boozer Transform | Coordinate transform | [booz_xform_jax](https://github.com/uwplasma/booz_xform_jax) | [BOOZ_XFORM](https://github.com/hiddenSymmetries/booz_xform) |
 | 3. Neoclassical | Effective ripple, drift-kinetic | [NEO_JAX](https://github.com/uwplasma/NEO_JAX), [sfincs_jax](https://github.com/uwplasma/sfincs_jax) | [NEO](https://github.com/PrincetonUniversity/STELLOPT), [SFINCS](https://github.com/landreman/sfincs) |
-| 4. Turbulence | Gyrokinetic equation | [SPECTRAX-GK](https://github.com/uwplasma/SPECTRAX-GK) | [GX](https://bitbucket.org/gyrokinetics/gx), [GENE](https://genecode.org) |
+| 4. Turbulence | Gyrokinetic equation | [GKX](https://github.com/uwplasma/GKX) | [GX](https://bitbucket.org/gyrokinetics/gx), [GENE](https://genecode.org) |
 | 5. Transport | Profile evolution, power balance | [NEOPAX](https://github.com/uwplasma/NEOPAX) | [Trinity3D](https://bitbucket.org/gyrokinetics/t3d) |
 
 ## Where to Put Code
@@ -72,7 +72,7 @@ Install the primary code, document the API and convergence behavior, write examp
   - [ ] `NEO`
   - [ ] `SFINCS`
 - [ ] Stage 4 -- Turbulence
-  - [ ] `SPECTRAX-GK`
+  - [ ] `GKX`
   - [ ] `GX`
   - [ ] `GENE`
 - [ ] Stage 5 -- Transport
@@ -96,7 +96,7 @@ Containerize stages and write tests. Full checklist in the [Guide](docs/guide.md
   - [ ] `NEO`
   - [x] `SFINCS`
 - [ ] Stage 4 -- Turbulence
-  - [x] `SPECTRAX-GK`
+  - [x] `GKX`
   - [ ] `GX`
   - [ ] `GENE`
 - [x] Stage 5 -- Transport

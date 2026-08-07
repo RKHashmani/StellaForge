@@ -8,7 +8,7 @@ driftless-star implements the stellarator design workflow described in the compa
 
 **Goal:** A working forward pass -- a single traversal of the pipeline from boundary Fourier coefficients and profile guesses through to transport-consistent profiles and fusion-power metrics (P_fus, Q). An initial **closed loop** is now implemented on top of this: Stage 5's transport solution is fit back into the Stage 1 pressure profile and the forward pass re-run, iterating toward a transport-consistent equilibrium via the external `ouroboros` driver (see [Closing the Loop](mvp-pipeline.md#closing-the-loop)). The re-run rebuilds the equilibrium, so the updated geometry flows on to Stages 3/4, and from iteration 2 the transport-evolved n(r)/T(r)/E_r(r) are prescribed to Stages 3/4/5 as well, so every profile consumer reads the previous pass's transport solution. Individual stages can be frozen after iteration 1 with the per-stage [`loop.rerun`](mvp-pipeline.md#per-stage-rerun-flags) flags. One extension remains future work: feeding back the **current** profile (only pressure is fit today).
 
-**JAX-first strategy:** The pipeline prioritizes JAX-native implementations for differentiability and tight integration: `vmec_jax` -> `booz_xform_jax` -> `sfincs_jax` -> `SPECTRAX-GK` -> `NEOPAX`. Other codes (`VMEC++`, `BOOZ_XFORM`, `NEO_JAX`, `NEO`, `SFINCS`, `GX`, `GENE`, `Trinity3D`) are swappable alternatives.
+**JAX-first strategy:** The pipeline prioritizes JAX-native implementations for differentiability and tight integration: `vmec_jax` -> `booz_xform_jax` -> `sfincs_jax` -> `GKX` -> `NEOPAX`. Other codes (`VMEC++`, `BOOZ_XFORM`, `NEO_JAX`, `NEO`, `SFINCS`, `GX`, `GENE`, `Trinity3D`) are swappable alternatives.
 
 ## Pipeline Architecture
 
@@ -22,7 +22,7 @@ driftless-star implements the stellarator design workflow described in the compa
 | 1. Equilibrium | Ideal-MHD force balance | `vmec_jax`, `DESC` | `VMEC++` | INDATA/JSON boundary coefficients, pressure/iota/current coefficients, PHIEDGE | `wout_*.nc` (NetCDF) |
 | 2. Boozer Transform | Coordinate transform to Boozer angles | `booz_xform_jax` | `BOOZ_XFORM` | `wout_*.nc` | `boozmn_*.nc` (NetCDF) |
 | 3. Neoclassical | Effective ripple, drift-kinetic transport | `NEO_JAX`, `sfincs_jax` | `NEO`, `SFINCS` | `NEO_JAX`: `boozmn_*.nc`; `SFINCS`: `wout_*.nc` + input file | `neo_out.*`, `sfincs_jax_flux_profiles.h5` |
-| 4. Turbulence | Delta-f gyrokinetic equation | `SPECTRAX-GK` | `GX`, `GENE` | Geometry + species profiles/gradients | gamma, omega, heat/particle flux (NetCDF/CSV) |
+| 4. Turbulence | Delta-f gyrokinetic equation | `GKX` | `GX`, `GENE` | Geometry + species profiles/gradients | gamma, omega, heat/particle flux (NetCDF/CSV) |
 | 5. Transport | 1D conservation laws for n_s, p_s | `NEOPAX` | `Trinity3D` | geometry + fluxes | n(r), T(r), E_r(r), P_fus, Q (HDF5/NetCDF) |
 
 ### Pipeline DAG
@@ -43,14 +43,14 @@ Snakemake rules define which files connect which stages. Each stage's `spec.md` 
 **Key points** from the TeX manuscripts:
 
 1. **Screening-only outputs vs. transport state variables.** `NEO_JAX`'s epsilon_eff is central to ranking candidate geometries but is NOT advanced by a transport solver. It should not be wired as a transport input.
-2. **Dual-role outputs.** Heat/particle flux from `SPECTRAX-GK` and neoclassical flux from `SFINCS` are simultaneously optimization objectives (to minimize) AND direct numerical inputs for transport profile evolution.
-3. **Turbulence coupling.** `NEOPAX` has turbulence-coupling utilities, but the `SPECTRAX-GK` -> `NEOPAX` path (Stage 4 -> Stage 5) is not yet the default.
+2. **Dual-role outputs.** Heat/particle flux from `GKX` and neoclassical flux from `SFINCS` are simultaneously optimization objectives (to minimize) AND direct numerical inputs for transport profile evolution.
+3. **Turbulence coupling.** `NEOPAX` has turbulence-coupling utilities, but the `GKX` -> `NEOPAX` path (Stage 4 -> Stage 5) is not yet the default.
 
 ### Swappability Patterns
 
 The pipeline should eventually support config-driven implementation swapping. Possible levels of swappability:
 
-- **Single-stage swap.** Change `inputs/<run>/config.yaml` to select a different implementation for one stage. The output file format should match what downstream stages expect. Example: swap Stage 4 from `SPECTRAX-GK` to `GX`.
+- **Single-stage swap.** Change `inputs/<run>/config.yaml` to select a different implementation for one stage. The output file format should match what downstream stages expect. Example: swap Stage 4 from `GKX` to `GX`.
 
 - **Multi-stage swap.** A single combined Snakemake rule replaces multiple individual stage rules. It should produce all output files that downstream stages expect. Example: `DESC` can perform both equilibrium solving and Boozer transformation internally, replacing Stages 1 and 2 with a single rule.
 
@@ -223,7 +223,7 @@ Place tests in `tests/stage{N}-{name}/`.
 **Regression tests.** Save known-good output files from a reference case. Write tests that compare new outputs against these baselines using explicit tolerances: `np.testing.assert_allclose(actual, expected, rtol=1e-6)`.
 
 **Integration tests.** Verify that the stage's output is valid input for its downstream consumers. For example:
-- Stage 1: verify `wout_*.nc` can be read by `booz_xform_jax` (Stage 2), `sfincs_jax` (Stage 3), and `SPECTRAX-GK` (Stage 4)
+- Stage 1: verify `wout_*.nc` can be read by `booz_xform_jax` (Stage 2), `sfincs_jax` (Stage 3), and `GKX` (Stage 4)
 - Stage 2: verify `boozmn_*.nc` can be read by `NEO_JAX` (Stage 3)
 - Stage 3: verify `sfincs_jax_flux_profiles.h5` (from `sfincs_jax`) can be read by `NEOPAX` (Stage 5)
 - Stage 4: verify flux CSV output can be consumed by `NEOPAX` (Stage 5)
@@ -251,7 +251,7 @@ When a stage completes Phase 2 (containerized, tested, and producing valid outpu
 > Define the process for adding a stage to the Snakemake DAG.
 
 **Design points to keep in mind:**
-- The forward-pass Stage 3 (`sfincs_jax`) reads only the Stage 1 wout, so it runs in parallel with Stage 2; Stage 4 (`SPECTRAX-GK`) also needs the Stage 2 boozmn, so it follows Stage 2.
+- The forward-pass Stage 3 (`sfincs_jax`) reads only the Stage 1 wout, so it runs in parallel with Stage 2; Stage 4 (`GKX`) also needs the Stage 2 boozmn, so it follows Stage 2.
 - `NEO_JAX` reads the Stage 2 boozmn and runs alongside `sfincs_jax` as a screening diagnostic, but it has **no Snakemake rule** and is not part of the forward pass. Its epsilon_eff is a screening metric only. It should not be wired as a dependency for Stage 5.
 - Stages 3 and 4 each fan out one Snakemake job per flux surface via a three-rule `prepare` (checkpoint) / `run_one` / `collect` layout; see [Per-surface fan-out](mvp-pipeline.md#per-surface-fan-out-stages-3-and-4).
 - On GPU hosts every job is pinned to one device from a user-supplied pool (or every host GPU via `gpu_ids: "all"`), so no pipeline container reaches a device outside it; see [Multi-GPU scheduling](mvp-pipeline.md#multi-gpu-scheduling).
