@@ -51,7 +51,6 @@ STAGES_DIR = SCRIPT_DIR.parent
 DEFAULT_COMMON_CONFIG = STAGES_DIR.parent / "inputs" / "quick_run" / "common_input.toml"
 DEFAULT_SPECTRAX_TEMPLATE = STAGES_DIR.parent / "inputs" / "quick_run" / "HSX_vacuum_ns201_quickrun.toml"
 DEFAULT_OUTPUT_DIR = STAGES_DIR.parent / "outputs" / "quick_run" / "stage4_turbulence"
-DEFAULT_SPECTRAX_ROOT = Path(__file__).resolve().parents[3] / "SPECTRAX-GK"
 DEFAULT_FD_PERTURB_REL_STEP = 0.5
 DEFAULT_FD_DKAP_DENSITY = 0.5
 DEFAULT_FD_DKAP_TEMPERATURE = 0.5
@@ -684,7 +683,6 @@ def _build_manifest(
     *,
     neopax_result: Path,
     common_config: Path,
-    spectrax_root: Path,
     output_dir: Path,
     snapshot: ProfileSnapshot,
     species: list[SpeciesMeta],
@@ -982,11 +980,10 @@ def _build_manifest(
             )
 
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "profiles_source": str(args.profiles_source).lower(),
         "neopax_result": "" if neopax_result is None else str(neopax_result.resolve()),
         "common_config": str(common_config.resolve()),
-        "spectrax_root": str(spectrax_root.resolve()),
         "output_dir": str(output_dir.resolve()),
         "snapshot_time": snapshot.time_value,
         "electron_model": str(electron_model_value).lower(),
@@ -1216,7 +1213,6 @@ def _write_normalization_audit(output_dir: Path, manifest: dict[str, Any]) -> No
 
 def cmd_prepare(args: argparse.Namespace) -> int:
     common_config = Path(args.common_config).resolve()
-    spectrax_root = Path(args.spectrax_root).resolve()
     output_dir = Path(args.output_dir).resolve()
     # Anchor a relative --spectrax-template at the invocation CWD like every other CLI path
     # argument; the template resolver downstream would otherwise anchor it at the
@@ -1258,7 +1254,6 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     manifest = _build_manifest(
         neopax_result=neopax_result,
         common_config=common_config,
-        spectrax_root=spectrax_root,
         output_dir=output_dir,
         snapshot=snapshot,
         species=species,
@@ -1369,16 +1364,10 @@ def cmd_run_one(args: argparse.Namespace) -> int:
             )
         )
         return 0
-    spectrax_root = Path(manifest["spectrax_root"]).resolve()
-    src_path = spectrax_root / "src"
     run_dir = Path(run_spec["run_dir"]).resolve()
     config_path = Path(run_spec["config_path"]).resolve()
     output_prefix = str(run_spec["output_prefix"])
     env = os.environ.copy()
-    existing_pythonpath = env.get("PYTHONPATH", "").strip()
-    env["PYTHONPATH"] = (
-        str(src_path) if not existing_pythonpath else os.pathsep.join([str(src_path), existing_pythonpath])
-    )
     # When the parallel launcher starts this worker it exports the backend selectors into the
     # environment already, so --backend is omitted and the inherited variables are left untouched.
     # A direct invocation with --backend configures those selectors here instead. --gpu-ids may
@@ -1514,9 +1503,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"skipping {len(already_done)} already completed runs")
 
     def _env_for_slot(slot: int) -> dict[str, str]:
-        env = {
-            "PYTHONPATH": str((Path(manifest["spectrax_root"]) / "src").resolve()),
-        }
+        env: dict[str, str] = {}
         gpu_id = gpu_ids[slot % len(gpu_ids)] if mode == "gpu" else None
         _apply_backend_env(env, mode, gpu_id, args.threads_per_run)
         return env
@@ -2121,7 +2108,6 @@ def cmd_all(args: argparse.Namespace) -> int:
         profiles_source=args.profiles_source,
         neopax_result=None if result_path is None else str(result_path),
         common_config=str(config_path),
-        spectrax_root=args.spectrax_root,
         spectrax_template=spectrax_template,
         output_dir=str(output_dir),
         time_index=args.time_index,
@@ -2242,7 +2228,6 @@ def _add_common_io_args(parser: argparse.ArgumentParser) -> None:
         default=str(DEFAULT_OUTPUT_DIR),
         help="Directory for manifest, SPECTRAX outputs, and collected fluxes",
     )
-    parser.add_argument("--spectrax-root", default=str(DEFAULT_SPECTRAX_ROOT))
     parser.add_argument(
         "--spectrax-template",
         default=str(DEFAULT_SPECTRAX_TEMPLATE),

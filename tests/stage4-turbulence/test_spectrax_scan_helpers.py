@@ -376,13 +376,14 @@ def test_cmd_prepare_dispatches_prescribed_source(tmp_path: Path) -> None:
     args = scan.build_parser().parse_args([
         "prepare",
         "--common-config", str(config),
-        "--spectrax-root", str(tmp_path),
         "--output-dir", str(out_dir),
         "--profiles-source", "prescribed",
         "--vmec-file-override", str(write_wout(tmp_path / "wout_synth.nc")),
     ])
     assert scan.cmd_prepare(args) == 0
     manifest = json.loads((out_dir / "manifest.json").read_text())
+    assert manifest["schema_version"] == 2
+    assert "spectrax_root" not in manifest
     assert manifest["profiles_source"] == "prescribed"
     assert not manifest.get("neopax_result")
     assert [run["rho"] for run in manifest["runs"]] == [0.25, 0.5, 0.75, 1.0]
