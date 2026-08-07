@@ -156,10 +156,11 @@ download the full dataset. The default root is
 
 ```
 # First 10 rows (the default limit is 1)
-pixi run constellaration-generate --limit 10
+pixi run --manifest-path experiments/constellaration/pixi.toml generate --limit 10
 
 # Exact IDs, or use --ids-file ids.txt
-pixi run constellaration-generate --id DGDvAUqji95R8kRxZmucCg6 --id DN4iUQNyzJ25VxSzdewLE9r
+pixi run --manifest-path experiments/constellaration/pixi.toml generate \
+  --id DGDvAUqji95R8kRxZmucCg6 --id DN4iUQNyzJ25VxSzdewLE9r
 ```
 
 Every generated folder contains its VMEC boundary, Stage 3/4/5 quick-run
@@ -172,18 +173,19 @@ Launch every generated config sequentially (or repeat `--id` to select a
 subset):
 
 ```
-pixi run constellaration-launch --cores 4
-pixi run constellaration-launch --dry-run --id DGDvAUqji95R8kRxZmucCg6
+pixi run --manifest-path experiments/constellaration/pixi.toml launch --cores 4
+pixi run --manifest-path experiments/constellaration/pixi.toml launch \
+  --dry-run --id DGDvAUqji95R8kRxZmucCg6
 ```
 
 The launcher performs one forward pass by default. Add `--loop-iters 3` for the
 closed-loop driver, or `--profile executors/htcondor/profiles/htcondor-gpu` to
 dispatch through the repository's HTCondor profile.
 
-For production HTCondor batches, use the root-level wrapper:
+For production HTCondor batches, use the experiment wrapper:
 
 ```bash
-./run/constellaration_generation.sh --all
+./experiments/constellaration/run.sh --all
 ```
 
 It generates the next 100 dataset configs, keeps up to ten configs active at
@@ -206,13 +208,15 @@ available as the index. Caller arguments override wrapper defaults, for example:
 
 ```bash
 # Small two-config test batch, one forward pass
-./run/constellaration_generation.sh --batch-size 2 --loop-iters 0
+./experiments/constellaration/run.sh --batch-size 2 --loop-iters 0
 
 # Explicit IDs instead of the next dataset slice
-./run/constellaration_generation.sh --id DGDvAUqji95R8kRxZmucCg6 --id DN4iUQNyzJ25VxSzdewLE9r
+./experiments/constellaration/run.sh \
+  --id DGDvAUqji95R8kRxZmucCg6 --id DN4iUQNyzJ25VxSzdewLE9r
 ```
 
-See [`run/README.md`](run/README.md) for the complete batch lifecycle,
+See [`experiments/constellaration/README.md`](experiments/constellaration/README.md)
+for the complete batch lifecycle,
 manifest format, restart behavior, and archive restoration instructions.
 
 ### Run on GPUs

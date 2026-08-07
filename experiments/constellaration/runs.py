@@ -31,7 +31,7 @@ from urllib import error, parse, request
 
 import yaml
 
-from .utils.config_edit import apply_assignments
+from src.utils.config_edit import apply_assignments
 
 logger = logging.getLogger(__name__)
 
@@ -410,7 +410,7 @@ def materialize_run(
 
 def generate_runs(args: argparse.Namespace) -> list[Path]:
     """Fetch rows selected by CLI arguments and materialize their run folders."""
-    repo_root = Path(__file__).resolve().parent.parent
+    repo_root = Path(__file__).resolve().parents[2]
     output_root = _logical_absolute(args.output_root)
     template_dir = args.template_dir
     if not template_dir.is_absolute():
@@ -497,7 +497,7 @@ def _launch_command(
 ) -> list[str]:
     """Build the forward-pass or closed-loop command for one config."""
     if repo_root is None:
-        repo_root = Path(__file__).resolve().parent.parent
+        repo_root = Path(__file__).resolve().parents[2]
     loop_iters = args.loop_iters
     profile = getattr(args, "profile", None)
     container_runtime = getattr(args, "container_runtime", None)
@@ -596,7 +596,7 @@ def launch_runs(args: argparse.Namespace) -> int:
         raise ValueError(f"loop-iters must be >= 0, got {args.loop_iters}")
     if args.dry_run and args.loop_iters:
         raise ValueError("--dry-run cannot be combined with --loop-iters; use a forward dry-run first")
-    repo_root = Path(__file__).resolve().parent.parent
+    repo_root = Path(__file__).resolve().parents[2]
     configs = discover_configs(args.output_root, args.id)
     failures: list[Path] = []
     for index, config_path in enumerate(configs, start=1):
@@ -716,7 +716,7 @@ def _create_batch(
     if duplicates:
         raise ValueError(f"IDs already recorded in the manifest: {', '.join(duplicates)}")
 
-    repo_root = Path(__file__).resolve().parent.parent
+    repo_root = Path(__file__).resolve().parents[2]
     template_dir = args.template_dir
     if not template_dir.is_absolute():
         template_dir = repo_root / template_dir
@@ -988,7 +988,7 @@ def batch_runs(args: argparse.Namespace) -> int:
 
     output_root = _logical_absolute(args.output_root)
     manifest_path = output_root / "manifest.json"
-    repo_root = Path(__file__).resolve().parent.parent
+    repo_root = Path(__file__).resolve().parents[2]
     with _batch_lock(output_root):
         manifest = _load_manifest(manifest_path, args)
         total_rows = None

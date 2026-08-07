@@ -12,7 +12,7 @@ from urllib import error
 import pytest
 import yaml
 
-from src import constellaration_runs as runs
+from experiments.constellaration import runs
 
 
 def _row(run_id: str = "Dtest123") -> dict:
@@ -150,7 +150,7 @@ def test_request_json_retries_transient_dataset_index_response(monkeypatch: pyte
 
 
 def test_materialize_run_writes_self_contained_quick_run(tmp_path: Path) -> None:
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     config_path = runs.materialize_run(
         _row(),
         output_root=tmp_path,
@@ -178,7 +178,7 @@ def test_materialize_run_writes_self_contained_quick_run(tmp_path: Path) -> None
 
 
 def test_materialize_run_refuses_to_overwrite(tmp_path: Path) -> None:
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     kwargs = {
         "output_root": tmp_path,
         "template_dir": repo_root / "inputs/quick_run",

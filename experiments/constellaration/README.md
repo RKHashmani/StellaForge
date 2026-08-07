@@ -1,18 +1,40 @@
-# ConStellaration batch runner
+# ConStellaration data generation
 
-[`constellaration_generation.sh`](./constellaration_generation.sh) generates
+[`run.sh`](./run.sh) generates
 pipeline inputs from the
 [`proxima-fusion/constellaration`](https://huggingface.co/datasets/proxima-fusion/constellaration)
 dataset, runs them through driftless-star on HTCondor, records progress, and
 archives completed batches to reduce the number of loose files on staging.
 
+This directory is its own Pixi workspace. Its tasks delegate to the locked
+`pipeline` environment in the repository root, so the experiment reuses the
+same Snakemake and HTCondor dependencies without adding experiment-specific
+tasks or dependencies to the main `pixi.toml`.
+
 ## Quick start
 
-From any directory, run:
+From the repository root, run:
 
 ```
-bash data_generation/constellaration_generation.sh --all
+bash run.sh --all
 ```
+
+The individual experiment tasks are also available directly:
+
+```bash
+# Generate inputs only
+pixi run --manifest-path experiments/constellaration/pixi.toml generate --limit 10
+
+# Launch generated inputs only
+pixi run --manifest-path experiments/constellaration/pixi.toml launch --cores 4
+
+# Run the experiment tests
+pixi run --manifest-path experiments/constellaration/pixi.toml test
+```
+
+If your shell is already in `experiments/constellaration/`, the shorter forms
+`pixi run generate`, `pixi run launch`, `pixi run batch`, and `pixi run test`
+are equivalent.
 
 Note that continuously running the generation on htcondor might require screen/tmux.
 
@@ -25,12 +47,12 @@ The script locates the repository root, changes into it, and runs this Pixi
 task with the following defaults. Before launching, it checks that this user
 has no active local Snakemake/Ouroboros controller and runs Snakemake's
 `--unlock` operation to clear a stale repository lock left by an interrupted
-controller. The unlock uses the no-op `data_generation/unlock.smk`; it does not
+controller. The unlock uses the no-op `experiments/constellaration/unlock.smk`; it does not
 run or modify `inputs/quick_run`. The script refuses to unlock when a controller
 is still active.
 
 ```
-pixi run constellaration-batch \
+pixi run --manifest-path experiments/constellaration/pixi.toml batch \
   --output-root /staging/groups/driftless_star/constellaration_runs \
   --profile executors/htcondor/profiles/htcondor-gpu \
   --container-runtime apptainer \
@@ -95,14 +117,14 @@ is separate from the closed-loop `--loop-iters` limit.
 Use a larger safety limit when needed:
 
 ```bash
-./data_generation/constellaration_generation.sh --loop-iters 100
+./experiments/constellaration/run.sh --loop-iters 100
 ```
 
 Use `--loop-iters 0` for only one forward pass through Stages 1–5, without the
 closed-loop feedback process:
 
 ```bash
-./data_generation/constellaration_generation.sh --loop-iters 0
+./experiments/constellaration/run.sh --loop-iters 0
 ```
 
 ## Files on staging
@@ -172,7 +194,7 @@ If a config fails, the batch is not archived and its loose files remain
 available for diagnosis. Run the same command again after fixing the problem:
 
 ```bash
-./data_generation/constellaration_generation.sh --all
+./experiments/constellaration/run.sh --all
 ```
 
 The driver resumes the unfinished batch, skips configs already marked
@@ -184,28 +206,28 @@ configs in the config batch from being attempted. When invoking the Pixi
 task directly, enable that behavior with:
 
 ```bash
-./data_generation/constellaration_generation.sh --keep-going
+./experiments/constellaration/run.sh --keep-going
 ```
 
 ## Useful overrides
 
 ```bash
 # Process every dataset row as consecutive tar batches
-./data_generation/constellaration_generation.sh --all
+./experiments/constellaration/run.sh --all
 
 # Test with two generated configs
-./data_generation/constellaration_generation.sh --batch-size 2
+./experiments/constellaration/run.sh --batch-size 2
 
 # Submit all batch of config controllers at once instead of keeping 10 active
-./data_generation/constellaration_generation.sh --max-parallel 100
+./experiments/constellaration/run.sh --max-parallel 100
 
 # Run explicit IDs instead of the next dataset rows
-./data_generation/constellaration_generation.sh \
+./experiments/constellaration/run.sh \
   --id DGDvAUqji95R8kRxZmucCg6 \
   --id DN4iUQNyzJ25VxSzdewLE9r
 
 # Allow two concurrent jobs per allocated GPU
-./data_generation/constellaration_generation.sh --jobs-per-gpu 2
+./experiments/constellaration/run.sh --jobs-per-gpu 2
 ```
 
 The default controller concurrency is 10 and the allowed range is 1–100. The

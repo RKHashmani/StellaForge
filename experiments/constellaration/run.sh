@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 # A killed Snakemake controller can leave a stale repository lock. Never
@@ -27,9 +27,9 @@ echo "Checking for a stale Snakemake repository lock..."
 pixi run -e pipeline snakemake \
   --unlock \
   --cores 1 \
-  --snakefile data_generation/unlock.smk
+  --snakefile experiments/constellaration/unlock.smk
 
-exec pixi run constellaration-batch \
+exec pixi run --manifest-path "${SCRIPT_DIR}/pixi.toml" batch \
   --output-root /staging/groups/driftless_star/constellaration_runs \
   --profile executors/htcondor/profiles/htcondor-gpu \
   --container-runtime apptainer \

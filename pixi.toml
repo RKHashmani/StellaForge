@@ -22,21 +22,6 @@ cmd = "snakemake"
 default-environment = "pipeline"
 description = "Single forward pass, Stage 1 through Stage 5"
 
-[feature.pipeline.tasks.constellaration-generate]
-cmd = "python -m src.constellaration_runs generate"
-default-environment = "pipeline"
-description = "Generate quick-run configs from ConStellaration dataset rows"
-
-[feature.pipeline.tasks.constellaration-launch]
-cmd = "python -m src.constellaration_runs launch"
-default-environment = "pipeline"
-description = "Launch generated ConStellaration runs sequentially"
-
-[feature.pipeline.tasks.constellaration-batch]
-cmd = "python -m src.constellaration_runs batch"
-default-environment = "pipeline"
-description = "Generate, launch, track, and archive a ConStellaration batch"
-
 [feature.htcondor.target.linux-64.pypi-dependencies]
 snakemake-executor-plugin-htcondor = "==0.3.0"
 
