@@ -87,6 +87,49 @@ def test_load_total_pressure_missing_rho_raises(tmp_path: Path) -> None:
         fit_mod._load_total_pressure(bad, time_index=-1, final_time=False)
 
 
+# `_saved_time_count` reads the length of the strictly increasing prefix of `ts`; the comparison and plotting tools
+# use it to pick the last distinctly timed record of a solution. This pins the prefix rule on the shapes a save
+# buffer can take, including an all-zero axis, a partly filled one, a fully distinct one, NaN fill, and a repeated
+# final value, since neither of the last two compares greater and so both end the prefix.
+@pytest.mark.parametrize(
+    ("ts", "expected"),
+    [
+        ([0.0] * 10, 1),
+        ([0.0, 5.0, 10.0, 15.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 4),
+        (list(np.linspace(0.0, 20.0, 10)), 10),
+        ([3.0, 0.0, 0.0], 1),
+        ([0.0, 1.0, 2.0, np.nan, np.nan], 3),
+        ([0.0, 1.0, 2.0, 2.0, 2.0], 3),
+        ([0.0], 1),
+    ],
+)
+def test_saved_time_count_reads_the_increasing_prefix(ts: list[float], expected: int) -> None:
+    assert fit_mod._saved_time_count(np.asarray(ts)) == expected
+
+
+def test_saved_time_count_rejects_a_non_1d_axis() -> None:
+    with pytest.raises(ValueError, match="'ts' must be a 1-D time axis"):
+        fit_mod._saved_time_count(np.zeros((2, 3)))
+
+
+# A NaN in the selected slice would be polynomial-fitted straight into the equilibrium's AM coefficients and only
+# surface much later inside VMEC, so it is rejected at read time in both datasets that reach the fit. `rho` is
+# checked as well because it becomes the abscissa s = rho**2 of that same fit.
+@pytest.mark.parametrize("broken", ["pressure", "rho"])
+def test_non_finite_slice_raises(tmp_path: Path, broken: str) -> None:
+    rho, density, temperature = _profiles()
+    pressure = density * temperature
+    if broken == "pressure":
+        pressure[1, 2] = np.nan
+        expected = "total pressure holds non-finite values"
+    else:
+        rho[3] = np.inf
+        expected = "rho holds non-finite values"
+    f = write_transport_solution(tmp_path / "nonfinite.h5", rho=rho, pressure=pressure)
+    with pytest.raises(ValueError, match=expected):
+        fit_mod._load_total_pressure(f, time_index=-1, final_time=True)
+
+
 # This is the feedback step that turns the fitted pressure back into a VMEC input file for the next loop iteration.
 # Starting from a committed template fixture, it writes a new file with the fitted coefficients and asserts the pressure
 # keys are set correctly (`PMASS_TYPE`, `PRES_SCALE`, and the `AM` coefficient line). The expected `AM` line is
