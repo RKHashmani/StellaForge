@@ -66,7 +66,8 @@ booz-xform-jax = ">=0.1.0,<0.2"
 h5py = ">=3.16.0,<4"
 
 [feature.gkx.pypi-dependencies]
-gkx = ">=1.7.1,<2"
+# Head of unmerged GKX PR #24, which fixes the adaptive-chunk device-memory leak. Repin to a PyPI release after merge.
+gkx = { git = "https://github.com/uwplasma/GKX.git", rev = "a09801031bbaeb8801a5521986964c35ed6666e2" }
 
 [feature.gkx.tasks.stage-4-gkx]
 cmd = "gkx run --config ../inputs/quick_run/HSX_vacuum_ns201_quickrun.toml --out ../outputs/quick_run/stage4_turbulence/hsx_run_quickrun"
