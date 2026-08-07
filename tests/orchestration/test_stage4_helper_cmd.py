@@ -1,6 +1,6 @@
 """Tests for the ``src.stage4_helper`` per-phase command composers.
 
-``prepare_cmd``, ``run_one_cmd``, and ``collect_cmd`` turn the ``stage4.spectrax_gk``
+``prepare_cmd``, ``run_one_cmd``, and ``collect_cmd`` turn the ``stage4.gkx``
 config block into the three shell commands that the Snakefile's per-phase Stage 4
 rules run. The exact strings are the contract with those rules, so this pins them:
 the static base flags (the ``--vmec-file-override`` and ``--boozer-file-override``
@@ -31,7 +31,7 @@ from src.stage4_helper import (
 )
 from tests.helpers.stage_import import load_stage_module
 
-_STAGE4_SCRIPT = "stages/stage4-turbulence/spectrax_gk_radial_scan.py"
+_STAGE4_SCRIPT = "stages/stage4-turbulence/gkx_radial_scan.py"
 # Snakemake substitutes {input.*}/{output.*} at run time; swap them for literal path
 # tokens so the emitted command parses as a plain argument vector here.
 _PLACEHOLDER = re.compile(r"\{(?:input|output)\.[A-Za-z0-9_]+\}")
@@ -84,7 +84,7 @@ def compose(composer: Callable[..., str], **overrides) -> str:
     """
     base = dict(
         docker_prefix="docker run --rm",
-        image="ghcr.io/driftless-star/driftless-star:stage-4-spectrax-cpu",
+        image="ghcr.io/driftless-star/driftless-star:stage-4-gkx-cpu",
         stage_cfg={},
         output_dir="outputs/quick_run/stage4_turbulence",
         device="cpu",
@@ -108,15 +108,15 @@ def parse_with_stage_script(command: str) -> argparse.Namespace:
         pytest.fail(f"stage script parser rejected a composer-emitted flag: argv={argv} (exit {exc.code})")
 
 
-# `prepare_cmd` builds the shell command that writes the per-radius manifest and SPECTRAX runtime TOMLs. With an empty
+# `prepare_cmd` builds the shell command that writes the per-radius manifest and GKX runtime TOMLs. With an empty
 # config it should emit just the fixed base command: the two geometry-input overrides plus the literal `{input.*}`
 # placeholders Snakemake fills in at run time. The prepare parser takes no backend flag, so none may appear.
 def test_prepare_base_command_with_empty_config() -> None:
     assert compose(prepare_cmd) == (
-        "docker run --rm ghcr.io/driftless-star/driftless-star:stage-4-spectrax-cpu "
-        "python stages/stage4-turbulence/spectrax_gk_radial_scan.py prepare "
+        "docker run --rm ghcr.io/driftless-star/driftless-star:stage-4-gkx-cpu "
+        "python stages/stage4-turbulence/gkx_radial_scan.py prepare "
         "--common-config {input.common_config} "
-        "--spectrax-template {input.config_file} "
+        "--gkx-template {input.config_file} "
         "--vmec-file-override {input.wout} "
         "--boozer-file-override {input.boozer} "
         "--output-dir outputs/quick_run/stage4_turbulence"
@@ -128,8 +128,8 @@ def test_prepare_base_command_with_empty_config() -> None:
 # Snakemake substitutes at rule-execution time, and only the backend is added with an empty config on cpu.
 def test_run_one_base_command_with_empty_config() -> None:
     assert compose(run_one_cmd) == (
-        "docker run --rm ghcr.io/driftless-star/driftless-star:stage-4-spectrax-cpu "
-        "python stages/stage4-turbulence/spectrax_gk_radial_scan.py run-one "
+        "docker run --rm ghcr.io/driftless-star/driftless-star:stage-4-gkx-cpu "
+        "python stages/stage4-turbulence/gkx_radial_scan.py run-one "
         "--manifest outputs/quick_run/stage4_turbulence/manifest.json "
         "--run-name {wildcards.surf} "
         "--backend cpu"
@@ -140,8 +140,8 @@ def test_run_one_base_command_with_empty_config() -> None:
 # the exact string, including the flux_summary.h5 and neopax_fluxes.h5 destination filenames the pipeline consumes.
 def test_collect_base_command_with_empty_config() -> None:
     assert compose(collect_cmd) == (
-        "docker run --rm ghcr.io/driftless-star/driftless-star:stage-4-spectrax-cpu "
-        "python stages/stage4-turbulence/spectrax_gk_radial_scan.py collect "
+        "docker run --rm ghcr.io/driftless-star/driftless-star:stage-4-gkx-cpu "
+        "python stages/stage4-turbulence/gkx_radial_scan.py collect "
         "--manifest outputs/quick_run/stage4_turbulence/manifest.json "
         "--out outputs/quick_run/stage4_turbulence/flux_summary.h5 "
         "--neopax-flux-out outputs/quick_run/stage4_turbulence/neopax_fluxes.h5"
@@ -295,7 +295,7 @@ def test_radius_relabel_rejects_anything_that_is_not_a_convention(bad: object) -
 
 def test_relabel_base_command() -> None:
     assert compose(relabel_cmd, **_RELABEL_ARGS) == (
-        "docker run --rm ghcr.io/driftless-star/driftless-star:stage-4-spectrax-cpu "
+        "docker run --rm ghcr.io/driftless-star/driftless-star:stage-4-gkx-cpu "
         "python stages/stage4-turbulence/relabel_neopax_flux_radius.py "
         "--flux-file outputs/quick_run/stage4_turbulence/neopax_fluxes.h5 "
         "--wout outputs/quick_run/stage1_equilibrium/wout_run.nc "

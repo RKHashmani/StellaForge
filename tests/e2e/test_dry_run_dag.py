@@ -261,7 +261,7 @@ def test_frozen_stage3_keeps_iter1_provenance(tmp_path: Path) -> None:
     overrides = tmp_path / "loop_overrides.yaml"
     overrides.write_text(
         "stage4:\n"
-        "  spectrax_gk:\n"
+        "  gkx:\n"
         "    profiles_source: prescribed\n"
         "loop:\n"
         "  rerun:\n"

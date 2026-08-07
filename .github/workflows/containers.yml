@@ -60,8 +60,8 @@ jobs:
             {"environment": "stage-3-sfincs-gpu", "cuda-version": "12", "image-tag": "stage-3-sfincs-gpu", "platforms": "linux/amd64"},
             {"environment": "stage-3-neo-jax", "image-tag": "stage-3-neo-jax-cpu", "platforms": "linux/amd64,linux/arm64"},
             {"environment": "stage-3-neo-jax-gpu", "cuda-version": "12", "image-tag": "stage-3-neo-jax-gpu", "platforms": "linux/amd64"},
-            {"environment": "stage-4-spectrax", "image-tag": "stage-4-spectrax-cpu", "platforms": "linux/amd64,linux/arm64"},
-            {"environment": "stage-4-spectrax-gpu", "cuda-version": "12", "image-tag": "stage-4-spectrax-gpu", "platforms": "linux/amd64"},
+            {"environment": "stage-4-gkx", "image-tag": "stage-4-gkx-cpu", "platforms": "linux/amd64,linux/arm64"},
+            {"environment": "stage-4-gkx-gpu", "cuda-version": "12", "image-tag": "stage-4-gkx-gpu", "platforms": "linux/amd64"},
             {"environment": "stage-5-neopax", "image-tag": "stage-5-neopax-cpu", "platforms": "linux/amd64,linux/arm64"},
             {"environment": "stage-5-neopax-gpu", "cuda-version": "12", "image-tag": "stage-5-neopax-gpu", "platforms": "linux/amd64"},
             {"environment": "stage-5-t3d", "image-tag": "stage-5-t3d-cpu", "platforms": "linux/amd64,linux/arm64"}

@@ -20,10 +20,10 @@ driftless-star is a **recipe repo**: it contains environment definitions, contai
 | 1 | Equilibrium | `vmec_jax`, `DESC` | `VMEC++` | `docs/stage1-equilibrium/spec.md` |
 | 2 | Boozer Transform | `booz_xform_jax` | `BOOZ_XFORM` | `docs/stage2-boozer/spec.md` |
 | 3 | Neoclassical | `NEO_JAX`, `sfincs_jax` | `NEO`, `SFINCS` | `docs/stage3-neoclassical/spec.md` |
-| 4 | Turbulence | `SPECTRAX-GK` | `GX`, `GENE` | `docs/stage4-turbulence/spec.md` |
+| 4 | Turbulence | `GKX` | `GX`, `GENE` | `docs/stage4-turbulence/spec.md` |
 | 5 | Transport | `NEOPAX` | `Trinity3D` | `docs/stage5-transport/spec.md` |
 
-Forward-pass chain: `vmec_jax` -> `booz_xform_jax` -> `sfincs_jax` -> `SPECTRAX-GK` -> `NEOPAX`
+Forward-pass chain: `vmec_jax` -> `booz_xform_jax` -> `sfincs_jax` -> `GKX` -> `NEOPAX`
 
 **Key notes:**
 - `NEO_JAX` is **not** in the forward-pass chain: it computes epsilon_eff as a screening/optimization diagnostic, runs in parallel with `sfincs_jax`, and is not consumed by Stage 5.
@@ -48,8 +48,8 @@ Snakemake rules define which files connect which stages. Each stage's `spec.md` 
 **Key points from the TeX manuscripts:**
 
 1. **Screening-only outputs vs. transport state variables.** `NEO_JAX`'s epsilon_eff is central to ranking candidate geometries but is NOT advanced by a transport solver. It should not be wired as a transport input.
-2. **Dual-role outputs.** Heat/particle flux from `SPECTRAX-GK` and neoclassical flux from `SFINCS` are simultaneously optimization objectives (to minimize) AND direct numerical inputs for transport profile evolution.
-3. **Turbulence coupling.** `NEOPAX` has turbulence-coupling utilities, but the `SPECTRAX-GK` -> `NEOPAX` path (Stage 4 -> Stage 5) is not yet the default.
+2. **Dual-role outputs.** Heat/particle flux from `GKX` and neoclassical flux from `SFINCS` are simultaneously optimization objectives (to minimize) AND direct numerical inputs for transport profile evolution.
+3. **Turbulence coupling.** `NEOPAX` has turbulence-coupling utilities, but the `GKX` -> `NEOPAX` path (Stage 4 -> Stage 5) is not yet the default.
 
 ### Working with This Codebase
 

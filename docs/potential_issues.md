@@ -5,11 +5,11 @@
 - [ ] Use the standard `outputs/` tree as a cache to quickly retrieve results that have already been processed, kind of like a database.
 ## Documentation
 
-- [ ] Add more details for each software, e.g. for Spectrax-gk's `omega_t` what are units, what is it normalized to (gyro freq, etc), scale lengths. 
+- [ ] Add more details for each software, e.g. for GKX's `omega_t` what are units, what is it normalized to (gyro freq, etc), scale lengths.
 
 ## Code Quality / Tooling
 
-- [ ] No type checker is configured, so the type hints being added across the codebase (e.g. `stages/stage4-turbulence/spectrax_gk_radial_scan.py`) are unverified. Adding one (e.g. `ty`, mypy, or pyright) to CI and/or pre-commit would catch incorrect annotations. Raised on PR #78; deferred to a future PR.
+- [ ] No type checker is configured, so the type hints being added across the codebase (e.g. `stages/stage4-turbulence/gkx_radial_scan.py`) are unverified. Adding one (e.g. `ty`, mypy, or pyright) to CI and/or pre-commit would catch incorrect annotations. Raised on PR #78; deferred to a future PR.
 
 ## Stage 1 -- Equilibrium
 
@@ -29,7 +29,7 @@
 
 ## Stage 4 -- Turbulence
 
-- [ ] SPECTRAX-GK/GX, and GENE likely do not have directly compatible inputs; same adapter/translation issue as Stages 1 and 3
+- [ ] GKX/GX, and GENE likely do not have directly compatible inputs; same adapter/translation issue as Stages 1 and 3
 
 ## W&B / Output Tracking
 
