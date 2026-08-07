@@ -1626,12 +1626,31 @@ def _time_average_columns(
 
 
 def _t3d_median_estimator(values: np.ndarray) -> float:
-    valid = values[np.isfinite(values)]
-    if valid.size == 0:
+    """Reduce a diagnostics time trace to the median of its trailing-window medians.
+
+    The windows cover the last k samples for k = 1 .. N-1, matching Trinity3D's
+    ``GX.median_estimator``, so the oldest sample enters no window. Samples are not screened for
+    finiteness, so a NaN the windows cover propagates to the returned value rather than being
+    dropped, which keeps a failed run visible instead of reporting the median of its surviving
+    samples. Trinity3D leaves a single-sample trace undefined because its window list is empty,
+    and that sample is returned here.
+
+    Parameters
+    ----------
+    values : np.ndarray
+        One diagnostics column as a 1-D time trace, oldest sample first.
+
+    Returns
+    -------
+    float
+        Median of the trailing-window medians, NaN for an empty trace or a NaN inside a window.
+    """
+    trace = np.asarray(values, dtype=float)
+    if trace.size == 0:
         return math.nan
-    if valid.size == 1:
-        return float(valid[0])
-    trailing_medians = [np.median(valid[::-1][:k]) for k in range(1, valid.size)]
+    if trace.size == 1:
+        return float(trace[0])
+    trailing_medians = [np.median(trace[::-1][:k]) for k in range(1, trace.size)]
     return float(np.median(trailing_medians))
 
 
