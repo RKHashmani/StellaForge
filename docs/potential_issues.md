@@ -41,3 +41,4 @@
 - [ ] Container registry for external collaborators: where do external contributors host their alternative stage implementations? Maybe their own GHCR or Docker Hub, with the workflow engine pulling from there.
 - [ ] How to expose the workflow engine to external users.
 - [ ] How to validate that externally submitted containers are not a security threat.
+- [ ] A Snakemake profile with `rerun-triggers: mtime`, opted into by exporting `SNAKEMAKE_PROFILE` around a resume command, for restarting a long run against an existing output tree. Snakemake's default rerun triggers count any change to a rule's rendered shell command as staleness, which requeues completed Stage 4 GPU work.
