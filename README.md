@@ -115,7 +115,7 @@ Snakemake DAG, end-to-end tests, and publishing. Details in the [Guide](docs/gui
 
 ## Usage
 
-A *run* is a folder under `inputs/` holding its run config (`config.yaml`) and every stage input. A fresh clone ships one ready-to-run example, `inputs/quick_run/`. `common_input.toml` in the run folder is the shared transport config read by Stages 3, 4, and 5.
+A *run* is a folder under `inputs/` holding its run config (`config.yaml`) and every stage input. A fresh clone ships one ready-to-run example, `inputs/quick_run/`. Two W7-X cases are committed beside it, `inputs/w7-x_quick_run/` at that same smoke resolution and `inputs/w7-x_t3d_validation/` at the resolution the Trinity3D validation uses. `common_input.toml` in the run folder is the shared transport config read by Stages 3, 4, and 5.
 
 `driftless-star` iterates toward transport-consistent profiles, sequencing independent forward passes and feeding each pass's Stage 5 transport solution into the next one as a boundary refit from the evolved pressure and as kinetic profiles prescribed to Stages 3, 4, and 5:
 
@@ -163,6 +163,18 @@ pixi run driftless-star --config inputs/quick_run/config.yaml --cores 8 --gpu-id
 ```
 
 GPU mode needs an NVIDIA host with `nvidia-container-toolkit` configured on the docker daemon. See [docs/mvp-pipeline.md](docs/mvp-pipeline.md#multi-gpu-scheduling) for how the pinning works, how to share a host with other users, and the current limitations.
+
+### Recreate the Trinity3D + GX validation
+
+`inputs/w7-x_t3d_validation/` reconstructs the W7-X ion-temperature clamping case that Trinity3D runs with GX as its turbulent flux model. Frozen 6.7 keV electrons heat the evolving 1 keV ions through collisional exchange while ITG turbulence limits the resulting gradient, on a 9-point grid out to rho = 0.7. Iteration 1 builds every stage input from the analytical `[profiles]` parameters; later iterations prescribe their profiles from the previous transport solution.
+
+Before launching, pull the Stage 4 and 5 GPU images, and adjust `gpu_ids`/`jobs_per_gpu` to your host as described above. Then run the loop:
+
+```
+pixi run driftless-star --config inputs/w7-x_t3d_validation/config.yaml --max-iters 10 --cores 16
+```
+
+Each iteration lands under `outputs/w7-x_t3d_validation/loop/iter_N/`, and the loop stops once the pressure profile settles within `convergence.pressure_rel_tol`. The last iteration's `transport_solution.h5` carries the clamped ion temperature profile to hold against Trinity3D's `test-w7x-gx` case.
 
 ### Visualize the pipeline graph
 
