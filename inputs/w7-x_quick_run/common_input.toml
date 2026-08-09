@@ -1,7 +1,7 @@
 # Transport-style NEOPAX input using the W7-X geometry files added in
 # examples/inputs, with initial profiles matched to the Trinity3D W7-X example.
 # This file advances the e+H state with turbulence read from a Stage-4
-# SPECTRAX-GK flux file and stops after one accepted transport step.
+# GKX flux file and stops after one accepted transport step.
 
 [general]
 mode = "transport"
