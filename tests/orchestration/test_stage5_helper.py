@@ -94,3 +94,105 @@ def test_read_rho_edge_defaults_to_one(tmp_path: Path, body: str) -> None:
 def test_read_rho_edge_rejects_a_value_outside_the_unit_interval(tmp_path: Path, value: str) -> None:
     with pytest.raises(ValueError, match=r"\[geometry\].rho_edge"):
         read_rho_edge(str(_write_template(tmp_path, f"[geometry]\nrho_edge = {value}\n")))
+
+
+# --- [profiles] validation ---
+
+# Stage 5 is the last rule in the DAG, so a prescribed [profiles] block NEOPAX cannot load used to
+# surface only after Stages 1-4 had run. The closed-loop driver writes such a block into the
+# template from iteration 2 onward. These pin that a malformed one is rejected at parse time.
+
+_SPECIES_AND_GEOMETRY = '[species]\nnames = ["e", "ion"]\n\n[geometry]\nn_radial = 3\n\n'
+
+
+def _prepare_with_profiles(tmp_path: Path, profiles: str) -> None:
+    """Resolve a config whose ``[profiles]`` section is ``profiles``, raising on invalid ones."""
+    template = tmp_path / "inputs" / "common_input.toml"
+    template.parent.mkdir(parents=True, exist_ok=True)
+    template.write_text(_TEMPLATE + "\n" + _SPECIES_AND_GEOMETRY + profiles)
+    out = tmp_path / "out"
+    prepare_neopax_config(
+        s5_config_template=str(template),
+        s5_resolved_config=str(out / "stage5_transport" / "common_input_updated.toml"),
+        s1_output=str(out / "stage1_equilibrium" / "wout.nc"),
+        s2_output=str(out / "stage2_boozer" / "boozmn.nc"),
+        s3_output=str(out / "stage3_neoclassical" / "sfincs_flux.h5"),
+        s4_output=str(out / "stage4_turbulence" / "neopax_fluxes.h5"),
+        s5_output_dir=str(out / "stage5_transport"),
+    )
+
+
+def test_scalar_analytical_parameters_are_accepted(tmp_path: Path) -> None:
+    _prepare_with_profiles(tmp_path, '[profiles]\nmodel = "standard_analytical"\nn0 = 4.21\nT0 = 17.8\n')
+
+
+# NEOPAX coerces per-species lists for every analytical parameter, shape exponents included, so
+# parse-time validation must let them through.
+def test_per_species_lists_under_the_analytical_model_are_accepted(tmp_path: Path) -> None:
+    _prepare_with_profiles(
+        tmp_path,
+        '[profiles]\nmodel = "standard_analytical"\n'
+        "n0 = [4.21, 4.21]\nn_edge = [0.4, 0.4]\n"
+        "T0 = [6.7, 1.0]\nT_edge = [0.2, 0.2]\n"
+        "density_shape_power = [1.0, 1.0]\ntemperature_shape_power = [2.0, 2.0]\n"
+        "density_shape_alpha = [1.5, 1.5]\ntemperature_shape_alpha = [2.0, 1.0]\n",
+    )
+
+
+_VALID_PRESCRIBED = (
+    '[profiles]\nmodel = "prescribed"\n'
+    "density = [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]\n"
+    "temperature = [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]\n"
+    "Er = [0.0, 0.0, 0.0]\n"
+)
+
+
+def test_valid_prescribed_block_is_accepted(tmp_path: Path) -> None:
+    _prepare_with_profiles(tmp_path, _VALID_PRESCRIBED)
+
+
+@pytest.mark.parametrize(
+    "profiles, message",
+    [
+        pytest.param(
+            '[profiles]\nmodel = "prescribed"\ndensity = [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]\n',
+            r"\[profiles\].temperature is missing",
+            id="missing-array",
+        ),
+        pytest.param(
+            _VALID_PRESCRIBED.replace("density = [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]", "density = [[1.0, 2.0, 3.0]]"),
+            r"holds 1 species rows, expected 2",
+            id="species-row-count",
+        ),
+        pytest.param(
+            _VALID_PRESCRIBED.replace("Er = [0.0, 0.0, 0.0]", "Er = [0.0, 0.0]"),
+            r"rows must hold 3 points",
+            id="radial-point-count",
+        ),
+        pytest.param(
+            _VALID_PRESCRIBED.replace("density = [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]", "density = [1.0, 2.0, 3.0]"),
+            r"must be a 2-D array",
+            id="wrong-rank",
+        ),
+    ],
+)
+def test_malformed_prescribed_blocks_are_rejected(tmp_path: Path, profiles: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        _prepare_with_profiles(tmp_path, profiles)
+
+
+# Every tracked run deck must pass the parse-time validation.
+@pytest.mark.parametrize("run", ["w7-x_quick_run", "w7-x_t3d_validation", "quick_run"])
+def test_tracked_configs_pass_validation(tmp_path: Path, run: str) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    template = repo_root / "inputs" / run / "common_input.toml"
+    out = tmp_path / "out"
+    prepare_neopax_config(
+        s5_config_template=str(template),
+        s5_resolved_config=str(out / "stage5_transport" / "common_input_updated.toml"),
+        s1_output=str(out / "stage1_equilibrium" / "wout.nc"),
+        s2_output=str(out / "stage2_boozer" / "boozmn.nc"),
+        s3_output=str(out / "stage3_neoclassical" / "sfincs_flux.h5"),
+        s4_output=str(out / "stage4_turbulence" / "neopax_fluxes.h5"),
+        s5_output_dir=str(out / "stage5_transport"),
+    )
