@@ -104,8 +104,6 @@ temperature_floor = 1.0e-3
 transport_solver_backend = "radau"
 integrator = "radau"
 rhs_mode = "lagged_transport_response"
-# Selects the hairer_ntss step controller, which lets dt grow again after a burst of rejected
-# steps instead of holding it at its reduced value for the rest of the solve.
 radau_controller_mode = "hairer_ntss"
 # Freeze the FD response anchor at the t=0 profile (the one Stage 4 measured fluxes/slopes at).
 lagged_response_reuse_mode = "global_state_drift"
@@ -118,7 +116,7 @@ nonlinear_solver_maxiter = 20
 t0 = 0.0
 # Matches Trinity3D's t_max = 10 normalised time units, 10 * t_ref = 10 * 0.037405577 s.
 t_final = 0.3740558
-dt = 0.01
+dt = 0.0002
 rtol = 1.0e-6
 atol = 1.0e-8
 # 1/10 of t_final, so all save_n = 10 slots carry distinct times and the transient is resolved.
