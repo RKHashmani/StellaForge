@@ -8,10 +8,9 @@ run_name: w7x_t3d_reconstruction
 # null: run every stage on CPU images with no GPU access.
 # "all": run GPU images, pinning each concurrent job to one free GPU of the execution host
 # ids e.g. "4,5,6,7": run GPU images with each concurrent job pinned to one free id from the pool.
-gpu_ids: "all"
+gpu_ids: "0,1,2,3"
 # Concurrent jobs allowed per GPU.
-jobs_per_gpu: 1
-
+jobs_per_gpu: 4
 
 input_dir: inputs/w7-x_t3d_validation
 output_dir: outputs/w7-x_t3d_validation
@@ -23,7 +22,7 @@ filenames:
   s2_output: boozmn_{run_name}.nc
   s3_config: sfincs_input.{run_name}   # Stage 3 SFINCS namelist
   s3_output: sfincs_jax_flux_profiles.h5
-  s4_config: "{run_name}.toml"         # Stage 4 SPECTRAX-GK template
+  s4_config: "{run_name}.toml"         # Stage 4 GKX template
   s4_output: neopax_fluxes.h5
   s5_config: common_input.toml         # shared by Stages 3, 4, 5
   s5_output: transport_solution.h5
@@ -63,7 +62,12 @@ stage3:
     # Number of rho grid points for profiles_source: analytical (the axis point is
     # dropped, so for e.g. 51 points scan 50 surfaces). The other profile sources take
     # their grid from the profile data and ignore this.
-    analytical_n_radii: 51
+    # Matches [geometry].n_radial in common_input.toml, so Stage 3 solves exactly the
+    # NEOPAX transport grid (8 surfaces after the axis is dropped). NEOPAX runs with
+    # [neoclassical] flux_model = "none" here, so it never reads Stage 3's flux file --
+    # only the Snakemake DAG requires it to exist. Raise this when neoclassical fluxes
+    # are actually wired into transport.
+    analytical_n_radii: 9
     # num_radii: 4            # subsample this many radii inside the rho window
     # rho_min: 0.1            # lower edge of the rho window
     # rho_max: 0.9            # upper edge of the rho window
@@ -80,10 +84,19 @@ stage3:
     plot: true
     verbose_workers: true
 
-# Stage 4 SPECTRAX-GK radial scan.
+# Stage 4 GKX radial scan.
 # Surface-level concurrency is controlled by `snakemake --cores`.
 stage4:
-  spectrax_gk:
+  # Rewrite the collected flux file's `r` grid onto the minor-radius convention Stage 5 builds its
+  # own radial grid on. Stage 4 writes `r = Aminor_p * rho` from VMEC, and NEOPAX derives its minor
+  # radius differently, so the two grids disagree by up to ~1%. W7-X skews +0.83%, putting NEOPAX's
+  # outermost cell 2.9e-3 m past the file's last knot, which Stage 5 rejects at model construction.
+  # Options include:
+  # false: write the grid through unchanged
+  # "boozer_volume": sqrt(volume_p / (2 pi^2 R00_boozer)), what NEOPAX builds today
+  neopax_radius_relabel: "boozer_volume"
+
+  gkx:
     # --- Profile source ---
     # Options include:
     # "analytical": built from the analytical parameters in common_input.toml [profiles],
@@ -108,6 +121,10 @@ stage4:
     ntheta: 64
     t_max: 500.0
     average_window: 100
+    # Trinity3D estimates the saturated flux with a median of medians rather than a window mean, so
+    # match it for the benchmark. The reducer exists in the Stage 4 scan (gkx_radial_scan.py,
+    # --average-reducer) but defaults to window_mean.
+    average_reducer: t3d_median
     sample_stride: 50
     diagnostics_stride: 1
 
@@ -132,12 +149,3 @@ stage4:
     plot: true
     plot_run_heat_traces: true
     verbose_workers: true
-
-  # Rewrite the collected flux file's `r` grid onto the minor-radius convention Stage 5 builds its
-  # own radial grid on. Stage 4 writes `r = Aminor_p * rho` from VMEC, and NEOPAX derives its minor
-  # radius differently, so the two grids disagree by up to ~1%. W7-X skews +0.83%, putting NEOPAX's
-  # outermost cell 2.9e-3 m past the file's last knot, which Stage 5 rejects at model construction.
-  # Options include:
-  # false: write the grid through unchanged
-  # "boozer_volume": sqrt(volume_p / (2 pi^2 R00_boozer)), what NEOPAX builds today
-  neopax_radius_relabel: "boozer_volume"

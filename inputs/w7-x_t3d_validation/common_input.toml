@@ -1,7 +1,5 @@
-# Transport-style NEOPAX input using the W7-X geometry files added in
-# examples/inputs, with initial profiles matched to the Trinity3D W7-X example.
-# This file advances the e+H state with turbulence read from a Stage-4
-# SPECTRAX-GK flux file and stops after one accepted transport step.
+# Shared transport template for the W7-X / Trinity3D benchmark, with initial profiles matched
+# to the Trinity3D W7-X example.
 
 [general]
 mode = "transport"
@@ -10,6 +8,7 @@ mode = "transport"
 vmec_file = "../../outputs/w7-x_t3d_validation/stage1_equilibrium/wout_w7x_t3d_reconstruction.nc"
 boozer_file = "../../outputs/w7-x_t3d_validation/stage2_boozer/boozmn_w7x_t3d_reconstruction.nc"
 n_radial = 9
+# The Trinity3D + GX W7-X benchmark solves out to rho = 0.7.
 rho_edge = 0.7
 
 [neoclassical]
@@ -19,10 +18,6 @@ entropy_model = "none"
 [turbulence]
 flux_model = "fluxes_r_file"
 turbulence_file = "../../outputs/w7-x_t3d_validation/stage4_turbulence/neopax_fluxes.h5"
-# Build the turbulent flux response from the perturbed datasets Stage 4 writes under
-# response_mode = "fd_gradients". Options include:
-# "none": read the base fluxes only, leaving the perturbed datasets unused
-# "fd": finite-difference lagged response anchored on the file's base fluxes
 lagged_response_mode = "fd"
 
 [classical]
@@ -91,27 +86,48 @@ toggle_temperature = [false, true]
 toggle_Er = false
 
 [sources]
-temperature = []
+# Collisional electron -> ion energy exchange, the only heat input, matching the Trinity3D + GX W7-X case.
+# The frozen 6.7 keV electron profile heats the 1.0 keV ions; ITG turbulence limits the resulting gradient.
+temperature = ["power_exchange"]
 density = []
+
+[sources.parameters.power_exchange]
+mode = "all"
+# The default "neopax_simple" formula expects T in eV and n in m^-3, but the state carries keV and
+# 1e20 m^-3, so it comes out about 1.9x too large here. The "ntssfusion" electron-ion branch is
+# written for state units and lands within 0.4% of an independent NRL equipartition value.
+coulomb_log_mode = "ntssfusion"
 
 [transport_solver]
 density_floor = 1.0e-3
 temperature_floor = 1.0e-3
 transport_solver_backend = "radau"
 integrator = "radau"
+rhs_mode = "lagged_transport_response"
+# Selects the hairer_ntss step controller, which lets dt grow again after a burst of rejected
+# steps instead of holding it at its reduced value for the rest of the solve.
+radau_controller_mode = "hairer_ntss"
+# Freeze the FD response anchor at the t=0 profile (the one Stage 4 measured fluxes/slopes at).
+lagged_response_reuse_mode = "global_state_drift"
+lagged_response_reuse_rtol = 1.0e6
+lagged_response_reuse_atol = 1.0e6
 radau_num_stages = 7
 radau_error_estimator = "embedded2"
 nonlinear_solver_tol = 1.0e-7
 nonlinear_solver_maxiter = 20
 t0 = 0.0
-t_final = 20.0
-dt = 0.0002
+# Matches Trinity3D's t_max = 10 normalised time units, 10 * t_ref = 10 * 0.037405577 s.
+t_final = 0.3740558
+dt = 0.01
 rtol = 1.0e-6
 atol = 1.0e-8
-max_step = 1.0
+# 1/10 of t_final, so all save_n = 10 slots carry distinct times and the transient is resolved.
+max_step = 0.03740558
 min_step = 1.0e-14
 max_steps = 20000
-stop_after_accepted_steps = 1
+# stop_after_accepted_steps caps the solve at that many accepted steps, leaving every later save
+# slot unwritten at its preallocated floor value. Enable it only for single-step debugging.
+# stop_after_accepted_steps = 1
 throw = false
 debug_stage_markers = true
 debug_disable_jit = false
@@ -121,7 +137,10 @@ temperature_include_neo_convection = true
 temperature_include_turbulent_convection = false
 temperature_include_classical_convection = false
 temperature_convection_reconstruction = "closure_face_flux"
-temperature_heat_flux_reconstruction = "closure_face_flux"
+# Options include:
+# "tvd_mc": reconstructs the faces from the lagged cell fluxes
+# "closure_face_flux": ignores the lagged center fluxes passed to it and freezes Q even with the FD response active
+temperature_heat_flux_reconstruction = "tvd_mc"
 Er_source_mode = "ambipolar_local"
 work_source_mode = "local"
 Er_relax = 0.1
