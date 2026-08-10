@@ -3432,7 +3432,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wadler-lindig-0.1.7-pyhe01879c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
-      - pypi: https://files.pythonhosted.org/packages/0e/96/d28036de7e6538fa0f7891a3acc5ad879c7712a1fb92bdc927df3867b587/gkx-1.7.1-py3-none-any.whl
+      - pypi: git+https://github.com/uwplasma/GKX.git?rev=a09801031bbaeb8801a5521986964c35ed6666e2#a09801031bbaeb8801a5521986964c35ed6666e2
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/blosc-1.21.6-hb4dfabd_1.conda
@@ -3575,7 +3575,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wadler-lindig-0.1.7-pyhe01879c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
-      - pypi: https://files.pythonhosted.org/packages/0e/96/d28036de7e6538fa0f7891a3acc5ad879c7712a1fb92bdc927df3867b587/gkx-1.7.1-py3-none-any.whl
+      - pypi: git+https://github.com/uwplasma/GKX.git?rev=a09801031bbaeb8801a5521986964c35ed6666e2#a09801031bbaeb8801a5521986964c35ed6666e2
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/booz-xform-jax-0.1.1-pyhc364b38_0.conda
@@ -3708,7 +3708,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/xorg-libxdmcp-1.1.5-hc919400_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
-      - pypi: https://files.pythonhosted.org/packages/0e/96/d28036de7e6538fa0f7891a3acc5ad879c7712a1fb92bdc927df3867b587/gkx-1.7.1-py3-none-any.whl
+      - pypi: git+https://github.com/uwplasma/GKX.git?rev=a09801031bbaeb8801a5521986964c35ed6666e2#a09801031bbaeb8801a5521986964c35ed6666e2
   stage-4-gkx-gpu:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -3897,7 +3897,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wadler-lindig-0.1.7-pyhe01879c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
-      - pypi: https://files.pythonhosted.org/packages/0e/96/d28036de7e6538fa0f7891a3acc5ad879c7712a1fb92bdc927df3867b587/gkx-1.7.1-py3-none-any.whl
+      - pypi: git+https://github.com/uwplasma/GKX.git?rev=a09801031bbaeb8801a5521986964c35ed6666e2#a09801031bbaeb8801a5521986964c35ed6666e2
   stage-5-neopax:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -22100,10 +22100,9 @@ packages:
   - toml
   - tomli
   requires_python: '>=3.10'
-- pypi: https://files.pythonhosted.org/packages/0e/96/d28036de7e6538fa0f7891a3acc5ad879c7712a1fb92bdc927df3867b587/gkx-1.7.1-py3-none-any.whl
+- pypi: git+https://github.com/uwplasma/GKX.git?rev=a09801031bbaeb8801a5521986964c35ed6666e2#a09801031bbaeb8801a5521986964c35ed6666e2
   name: gkx
   version: 1.7.1
-  sha256: 1b6ca19d839980bc4d1fa1dbec71ecbb9c6d8bfd16d993b7f1c4db22366bd53e
   requires_dist:
   - jax
   - jaxlib
