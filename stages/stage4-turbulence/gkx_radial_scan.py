@@ -106,6 +106,7 @@ def _runtime_toml_text(manifest: dict[str, Any], run_spec: dict[str, Any]) -> st
     norm = manifest["normalization"]
     terms = manifest["terms"]
     run = manifest["run"]
+    output = manifest["output"]
 
     lines: list[str] = []
     for species in run_spec["runtime_species"]:
@@ -210,6 +211,9 @@ def _runtime_toml_text(manifest: dict[str, Any], run_spec: dict[str, Any]) -> st
             f"ky = {_toml_scalar(run['ky'])}",
             f"Nl = {_toml_scalar(run['Nl'])}",
             f"Nm = {_toml_scalar(run['Nm'])}",
+            "",
+            "[output]",
+            f"resolved_diagnostics = {_toml_scalar(output['resolved_diagnostics'])}",
             "",
         ]
     )
@@ -709,6 +713,7 @@ def _build_manifest(
     template_norm = _template_section(template_cfg, "normalization")
     template_terms = _template_section(template_cfg, "terms")
     template_run = _template_section(template_cfg, "run")
+    template_output = _template_section(template_cfg, "output")
     parse_species_list = lambda raw: [part.strip() for part in str(raw or "").split(",") if part.strip()]
     response_mode = str(getattr(args, "response_mode", "none")).strip().lower()
     perturb_density_species = parse_species_list(getattr(args, "perturb_density_species", ""))
@@ -1073,6 +1078,11 @@ def _build_manifest(
             "ky": float(_coalesce(args.ky, template_run.get("ky"), 1.0 / 21.0)),
             "Nl": int(_coalesce(args.nl, template_run.get("Nl"), 4)),
             "Nm": int(_coalesce(args.nm, template_run.get("Nm"), 8)),
+        },
+        "output": {
+            "resolved_diagnostics": bool(
+                _coalesce(args.resolved_diagnostics, template_output.get("resolved_diagnostics"), True)
+            ),
         },
         "gradient_mapping": {
             "coordinate": gradient_coordinate,
@@ -2182,6 +2192,7 @@ def cmd_all(args: argparse.Namespace) -> int:
         fixed_dt=args.fixed_dt,
         sample_stride=args.sample_stride,
         diagnostics_stride=args.diagnostics_stride,
+        resolved_diagnostics=args.resolved_diagnostics,
         chunk_steps=args.chunk_steps,
         cfl=args.cfl,
         state_sharding=args.state_sharding,
@@ -2310,6 +2321,12 @@ def _add_prepare_shaping_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--fixed-dt", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--sample-stride", type=int, default=50)
     parser.add_argument("--diagnostics-stride", type=int, default=1)
+    parser.add_argument(
+        "--resolved-diagnostics",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Retain the per-chunk resolved kx/ky/z diagnostic spectra in host RAM",
+    )
     parser.add_argument("--chunk-steps", type=int, default=None, help="Adaptive nonlinear chunk size in steps for each GKX run")
     parser.add_argument("--cfl", type=float, default=None)
     parser.add_argument("--state-sharding", default=None)

@@ -38,6 +38,11 @@ _PREPARE_OPTIONAL_FLAGS: list[tuple[str, str]] = [
     ("perturb_rel_step",            "--perturb-rel-step"),
 ]
 
+# (config_key, on_flag, off_flag) tri-state toggles accepted by the `prepare` subcommand.
+_PREPARE_BOOL_FLAGS: list[tuple[str, str, str]] = [
+    ("resolved_diagnostics", "--resolved-diagnostics", "--no-resolved-diagnostics"),
+]
+
 # Flux averaging and plotting happen in the collect step. Config t_max is deliberately not re-emitted
 # at collect: it reaches the manifest via prepare, and collect's --t-final falls back to the manifest
 # value, keeping a single source of truth for the time window.
@@ -112,6 +117,7 @@ def prepare_cmd(
         f"--output-dir {output_dir}",
     ]
     _append_optional_flags(parts, stage_cfg, _PREPARE_OPTIONAL_FLAGS)
+    _append_bool_flags(parts, stage_cfg, _PREPARE_BOOL_FLAGS)
     return " ".join(parts)
 
 
