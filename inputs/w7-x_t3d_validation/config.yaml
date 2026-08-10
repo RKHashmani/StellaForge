@@ -128,6 +128,12 @@ stage4:
     sample_stride: 50
     diagnostics_stride: 1
 
+    # --- Diagnostics output ---
+    # Overrides [output].resolved_diagnostics in the Stage 4 GKX template. Options include:
+    # true: retain every chunk's full kx/ky/z diagnostic spectra in host RAM
+    # false: skip them
+    resolved_diagnostics: false
+
     # --- Turbulence response (perturbed fluxes) ---
     # response_mode `fd_gradients` adds one perturbed sibling run per listed (channel,
     # species) pair per flux surface, multiplying the Stage 4 job count. `none` (or
