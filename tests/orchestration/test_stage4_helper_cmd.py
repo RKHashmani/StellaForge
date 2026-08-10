@@ -66,6 +66,7 @@ _PREPARE_OPTIONALS: list[tuple[str, str, object]] = [
 # max_parallel, collect_even_if_failures, and gpu_ids are retired keys that older
 # configs may still carry; every composer must ignore them.
 _FULL_CFG: dict = {key: value for key, _, value in _PREPARE_OPTIONALS} | {
+    "resolved_diagnostics": False,
     "average_window": 1.0,
     "gpu_ids": "0,1",
     "plot": False,
@@ -157,6 +158,17 @@ def test_prepare_optional_flag_emitted_exactly_once(key: str, flag: str, value: 
     assert f"{flag} {value}" in out
     assert out.split().count(flag) == 1
     assert flag not in compose(prepare_cmd, stage_cfg={})
+
+
+# resolved_diagnostics is the prepare-phase tri-state. True emits the on-flag, False the off-flag, and an absent key
+# emits neither, leaving the value to the GKX template. Token membership, because --resolved-diagnostics is a
+# substring of --no-resolved-diagnostics and a plain `in` check would pass on the off-flag alone.
+def test_prepare_resolved_diagnostics_tristate() -> None:
+    assert "--resolved-diagnostics" in compose(prepare_cmd, stage_cfg={"resolved_diagnostics": True}).split()
+    assert "--no-resolved-diagnostics" in compose(prepare_cmd, stage_cfg={"resolved_diagnostics": False}).split()
+    absent = compose(prepare_cmd, stage_cfg={}).split()
+    assert "--resolved-diagnostics" not in absent
+    assert "--no-resolved-diagnostics" not in absent
 
 
 # Flux averaging happens in the reduction step, so average_window is a collect-phase optional: present exactly once
