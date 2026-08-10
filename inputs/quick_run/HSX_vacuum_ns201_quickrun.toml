@@ -89,3 +89,7 @@ nonlinear = 1.0
 ky = 0.047619047619047616
 Nl = 4
 Nm = 8
+
+[output]
+# Retains every chunk's full kx/ky/z diagnostic spectra in host RAM until the end-of-run concatenation.
+resolved_diagnostics = true

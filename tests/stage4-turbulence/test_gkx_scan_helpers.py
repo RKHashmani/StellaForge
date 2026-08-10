@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import tomllib
 from pathlib import Path
 
 import h5py
@@ -390,3 +391,63 @@ def test_cmd_prepare_dispatches_prescribed_source(tmp_path: Path) -> None:
     # The analytical fallback also lands on the 5-point [geometry] grid and profiles_source echoes the CLI, so only a
     # snapshot-derived value proves the prescribed builder ran; the analytical Er is quadratic in rho, never this ramp.
     assert manifest["source_er"] == [0.0, 1.0, 2.0, 3.0, 4.0]
+
+
+# --- _runtime_toml_text ---
+
+def _write_template(tmp_path: Path, body: str) -> str:
+    # A template with no [output] table leaves resolved_diagnostics on its hard default, and an empty body leaves
+    # every other generated value there too. Naming a template also keeps these cases off the repo's own quick-run
+    # template, which --gkx-template otherwise defaults to and whose values are free to change.
+    path = tmp_path / "gkx_template.toml"
+    path.write_text(body, encoding="utf-8")
+    return str(path)
+
+
+def _prepared_deck(tmp_path: Path, *extra_argv: str) -> dict:
+    from tests.helpers.synthetic import write_wout
+
+    config = tmp_path / "common_input.toml"
+    config.write_text(PRESCRIBED_TOML)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    args = scan.build_parser().parse_args([
+        "prepare",
+        "--common-config", str(config),
+        "--output-dir", str(out_dir),
+        "--profiles-source", "prescribed",
+        "--vmec-file-override", str(write_wout(tmp_path / "wout_synth.nc")),
+        *extra_argv,
+    ])
+    assert scan.cmd_prepare(args) == 0
+    manifest = json.loads((out_dir / "manifest.json").read_text())
+    return tomllib.loads(Path(manifest["runs"][0]["config_path"]).read_text())
+
+
+# A deck that names no [output] table leaves resolved_diagnostics unreachable, so every generated deck must carry
+# the table. The hard default matches GKX's own, making a switched-off deck always an explicit act.
+def test_prepare_deck_defaults_resolved_diagnostics_on(tmp_path: Path) -> None:
+    cfg = _prepared_deck(tmp_path, "--gkx-template", _write_template(tmp_path, ""))
+    assert cfg["output"]["resolved_diagnostics"] is True
+
+
+# The template tier is reachable only while the CLI flag stays None when the flag is absent. Giving
+# --resolved-diagnostics an argparse default of True or False would pin every deck to that value and the template's
+# resolved_diagnostics would silently stop taking effect, which is what this asserts against.
+def test_prepare_deck_takes_resolved_diagnostics_from_the_template(tmp_path: Path) -> None:
+    template = _write_template(tmp_path, "[output]\nresolved_diagnostics = false\n")
+    cfg = _prepared_deck(tmp_path, "--gkx-template", template)
+    assert cfg["output"]["resolved_diagnostics"] is False
+
+
+# The CLI is the top tier, so an explicit --resolved-diagnostics overrides a template that switched the spectra off.
+def test_prepare_deck_cli_resolved_diagnostics_beats_the_template(tmp_path: Path) -> None:
+    template = _write_template(tmp_path, "[output]\nresolved_diagnostics = false\n")
+    cfg = _prepared_deck(tmp_path, "--gkx-template", template, "--resolved-diagnostics")
+    assert cfg["output"]["resolved_diagnostics"] is True
+
+
+# The off-flag has to reach the deck on its own, without a template that already switched the spectra off.
+def test_prepare_deck_cli_switches_resolved_diagnostics_off(tmp_path: Path) -> None:
+    cfg = _prepared_deck(tmp_path, "--no-resolved-diagnostics")
+    assert cfg["output"]["resolved_diagnostics"] is False
