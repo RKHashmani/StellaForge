@@ -181,7 +181,7 @@ def test_malformed_prescribed_blocks_are_rejected(tmp_path: Path, profiles: str,
         _prepare_with_profiles(tmp_path, profiles)
 
 
-# Every tracked run deck must pass the parse-time validation.
+# Every tracked run config must pass the parse-time validation.
 @pytest.mark.parametrize("run", ["w7-x_quick_run", "w7-x_t3d_validation", "quick_run"])
 def test_tracked_configs_pass_validation(tmp_path: Path, run: str) -> None:
     repo_root = Path(__file__).resolve().parents[2]

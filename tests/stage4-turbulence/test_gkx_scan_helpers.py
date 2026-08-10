@@ -429,7 +429,7 @@ def _write_template(tmp_path: Path, body: str) -> str:
     return str(path)
 
 
-def _prepared_deck(tmp_path: Path, *extra_argv: str) -> dict:
+def _prepared_runtime_toml(tmp_path: Path, *extra_argv: str) -> dict:
     from tests.helpers.synthetic import write_wout
 
     config = tmp_path / "common_input.toml"
@@ -449,30 +449,30 @@ def _prepared_deck(tmp_path: Path, *extra_argv: str) -> dict:
     return tomllib.loads(Path(manifest["runs"][0]["config_path"]).read_text())
 
 
-# A deck that names no [output] table leaves resolved_diagnostics unreachable, so every generated deck must carry
-# the table. The hard default matches GKX's own, making a switched-off deck always an explicit act.
-def test_prepare_deck_defaults_resolved_diagnostics_on(tmp_path: Path) -> None:
-    cfg = _prepared_deck(tmp_path, "--gkx-template", _write_template(tmp_path, ""))
+# A runtime TOML that names no [output] table leaves resolved_diagnostics unreachable, so every generated one
+# must carry the table. The hard default matches GKX's own, making a switched-off run always an explicit act.
+def test_runtime_toml_defaults_resolved_diagnostics_on(tmp_path: Path) -> None:
+    cfg = _prepared_runtime_toml(tmp_path, "--gkx-template", _write_template(tmp_path, ""))
     assert cfg["output"]["resolved_diagnostics"] is True
 
 
 # The template tier is reachable only while the CLI flag stays None when the flag is absent. Giving
-# --resolved-diagnostics an argparse default of True or False would pin every deck to that value and the template's
+# --resolved-diagnostics an argparse default of True or False would pin every run to that value and the template's
 # resolved_diagnostics would silently stop taking effect, which is what this asserts against.
-def test_prepare_deck_takes_resolved_diagnostics_from_the_template(tmp_path: Path) -> None:
+def test_runtime_toml_takes_resolved_diagnostics_from_the_template(tmp_path: Path) -> None:
     template = _write_template(tmp_path, "[output]\nresolved_diagnostics = false\n")
-    cfg = _prepared_deck(tmp_path, "--gkx-template", template)
+    cfg = _prepared_runtime_toml(tmp_path, "--gkx-template", template)
     assert cfg["output"]["resolved_diagnostics"] is False
 
 
 # The CLI is the top tier, so an explicit --resolved-diagnostics overrides a template that switched the spectra off.
-def test_prepare_deck_cli_resolved_diagnostics_beats_the_template(tmp_path: Path) -> None:
+def test_runtime_toml_cli_resolved_diagnostics_beats_the_template(tmp_path: Path) -> None:
     template = _write_template(tmp_path, "[output]\nresolved_diagnostics = false\n")
-    cfg = _prepared_deck(tmp_path, "--gkx-template", template, "--resolved-diagnostics")
+    cfg = _prepared_runtime_toml(tmp_path, "--gkx-template", template, "--resolved-diagnostics")
     assert cfg["output"]["resolved_diagnostics"] is True
 
 
-# The off-flag has to reach the deck on its own, without a template that already switched the spectra off.
-def test_prepare_deck_cli_switches_resolved_diagnostics_off(tmp_path: Path) -> None:
-    cfg = _prepared_deck(tmp_path, "--no-resolved-diagnostics")
+# The off-flag has to reach the runtime TOML on its own, without a template that already switched the spectra off.
+def test_runtime_toml_cli_switches_resolved_diagnostics_off(tmp_path: Path) -> None:
+    cfg = _prepared_runtime_toml(tmp_path, "--no-resolved-diagnostics")
     assert cfg["output"]["resolved_diagnostics"] is False
