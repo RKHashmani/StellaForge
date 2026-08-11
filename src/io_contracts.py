@@ -106,58 +106,112 @@ def _check_species_names(species: np.ndarray | None, name: str, problems: list[s
 
 # transport_solution.h5 ------------------------------------------------------------------
 
-_TRANSPORT_FIELDS = ("rho", "density", "temperature", "pressure", "Er", "ts")
+_TRANSPORT_FIELDS = (
+    "rho", "density", "temperature", "pressure", "Er", "ts",
+    "rho_face", "density_faces", "temperature_faces", "pressure_faces", "Er_faces",
+)
 
 
-def _check_species_profile(arr: np.ndarray, name: str, n_rho: int | None, problems: list[str]) -> None:
-    """Record problems for a species-resolved profile (static or time-resolved)."""
+def _check_species_profile(
+    arr: np.ndarray, name: str, n_rho: int | None, problems: list[str], *, coord: str = "rho"
+) -> None:
+    """Record problems for a species-resolved profile (static or time-resolved).
+
+    ``coord`` names the radial coordinate the trailing axis must span, so the same check serves the
+    cell-centered profiles against ``rho`` and the face profiles against ``rho_face``.
+    """
     if arr.ndim not in (2, 3):
         problems.append(
             f"'{name}' must be 2D (n_species, n_rho) or 3D (n_time, n_species, n_rho), got shape {arr.shape}"
         )
     elif n_rho is not None and arr.shape[-1] != n_rho:
-        problems.append(f"'{name}' trailing axis {arr.shape[-1]} != len(rho) {n_rho}")
+        problems.append(f"'{name}' trailing axis {arr.shape[-1]} != len({coord}) {n_rho}")
     _finite(arr, name, problems)
 
 
-def _check_transport_solution(data: dict[str, np.ndarray | None]) -> list[str]:
-    """Check the fields read by the Stage 3/4/5 transport-snapshot loaders.
+def _check_face_grid(rho_face: np.ndarray | None, n_rho: int | None, problems: list[str]) -> int | None:
+    """Check the required 1D ``rho_face`` coordinate, returning its length or ``None``.
 
-    The Stage 3 loader accepts either ``temperature`` or ``pressure`` and derives the
-    missing one, but the Stage 4 loader hard-requires ``temperature`` with no pressure
-    fallback. The contract therefore requires ``temperature`` (the field that satisfies
-    both readers) and keeps ``pressure`` optional.
-
-    Required: ``rho``, species-resolved ``density`` and ``temperature``, and ``Er`` with
-    no species axis. Optional: ``pressure`` (same rank as density) and ``ts``.
+    The faces bound the cells, so a solution on ``n_rho`` centers has exactly ``n_rho + 1`` faces.
+    Any other length means the two grids describe different geometry.
     """
-    problems: list[str] = []
+    n_face: int | None = None
+    if _require(rho_face, "rho_face", problems):
+        if rho_face.ndim != 1:
+            problems.append(f"'rho_face' must be 1D, got shape {rho_face.shape}")
+        else:
+            n_face = rho_face.shape[0]
+            if n_rho is not None and n_face != n_rho + 1:
+                problems.append(
+                    f"'rho_face' holds {n_face} faces, expected one more than the {n_rho} cell centers in 'rho'"
+                )
+        _finite(rho_face, "rho_face", problems)
+    return n_face
 
-    n_rho = _check_rho(data.get("rho"), problems)
 
-    density = data.get("density")
-    temperature = data.get("temperature")
-    for name, arr in (("density", density), ("temperature", temperature)):
+def _check_transport_state(
+    data: dict[str, np.ndarray | None],
+    *,
+    names: tuple[str, str, str, str],
+    coord: str,
+    n_points: int | None,
+    problems: list[str],
+) -> np.ndarray | None:
+    """Check one radial grid's worth of transport state, returning its density array or ``None``.
+
+    Parameters
+    ----------
+    data : dict
+        The datasets read from the file.
+    names : tuple of str
+        ``(density, temperature, pressure, Er)`` dataset names for this grid, so the same checks
+        serve the cell-centered state and its face counterpart.
+    coord : str
+        Name of the radial coordinate these profiles span, quoted in messages.
+    n_points : int or None
+        Length of that coordinate, or ``None`` when it could not be determined.
+    problems : list of str
+        Accumulator appended to in place.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        The density array, which the caller uses to cross-check ranks between the two grids.
+    """
+    density_name, temperature_name, pressure_name, er_name = names
+    density = data.get(density_name)
+    temperature = data.get(temperature_name)
+    for name, arr in ((density_name, density), (temperature_name, temperature)):
         if _require(arr, name, problems):
-            _check_species_profile(arr, name, n_rho, problems)
-    pressure = data.get("pressure")
+            _check_species_profile(arr, name, n_points, problems, coord=coord)
+    pressure = data.get(pressure_name)
     if pressure is not None:
-        _check_species_profile(pressure, "pressure", n_rho, problems)
-        if density is not None and pressure.ndim != density.ndim:
+        _check_species_profile(pressure, pressure_name, n_points, problems, coord=coord)
+        # Only the trailing axis is radial, so everything before it, time and species, must match density's.
+        if density is not None and pressure.shape[:-1] != density.shape[:-1]:
             problems.append(
-                f"'pressure' ndim {pressure.ndim} != 'density' ndim {density.ndim} (pressure must share density's rank)"
+                f"'{pressure_name}' leading axes {pressure.shape[:-1]} != '{density_name}' leading axes "
+                f"{density.shape[:-1]} ({pressure_name} must share {density_name}'s time and species axes)"
             )
 
-    er = data.get("Er")
-    if _require(er, "Er", problems):
+    er = data.get(er_name)
+    if _require(er, er_name, problems):
         if er.ndim not in (1, 2):
-            problems.append(f"'Er' must be 1D (n_rho,) or 2D (n_time, n_rho), got shape {er.shape}")
-        elif n_rho is not None and er.shape[-1] != n_rho:
-            problems.append(f"'Er' trailing axis {er.shape[-1]} != len(rho) {n_rho}")
-        _finite(er, "Er", problems)
+            problems.append(f"'{er_name}' must be 1D (n_rho,) or 2D (n_time, n_rho), got shape {er.shape}")
+        elif n_points is not None and er.shape[-1] != n_points:
+            problems.append(f"'{er_name}' trailing axis {er.shape[-1]} != len({coord}) {n_points}")
+        _finite(er, er_name, problems)
+        # Er drops the species axis but keeps density's time axis, so its leading axes are density's
+        # with the species entry removed.
+        if density is not None and density.ndim in (2, 3) and er.ndim == density.ndim - 1:
+            if er.shape[:-1] != density.shape[:-2]:
+                problems.append(
+                    f"'{er_name}' leading axes {er.shape[:-1]} != '{density_name}' time axis "
+                    f"{density.shape[:-2]} ({er_name} shares the time axis and drops only the species axis)"
+                )
 
     if density is not None and temperature is not None and density.shape != temperature.shape:
-        problems.append(f"'density' shape {density.shape} != 'temperature' shape {temperature.shape}")
+        problems.append(f"'{density_name}' shape {density.shape} != '{temperature_name}' shape {temperature.shape}")
     # Er advances with the same time axis as the profiles but carries no species axis,
     # so it must have exactly one fewer dimension than density.
     if (
@@ -168,7 +222,63 @@ def _check_transport_solution(data: dict[str, np.ndarray | None]) -> list[str]:
         and er.ndim != density.ndim - 1
     ):
         problems.append(
-            f"'Er' ndim {er.ndim} should be one less than 'density' ndim {density.ndim} (Er carries no species axis)"
+            f"'{er_name}' ndim {er.ndim} should be one less than '{density_name}' ndim {density.ndim} "
+            f"({er_name} carries no species axis)"
+        )
+    return density
+
+
+def _check_transport_solution(data: dict[str, np.ndarray | None]) -> list[str]:
+    """Check the fields read by the Stage 3/4/5 transport-snapshot loaders.
+
+    NEOPAX solves on a staggered finite-volume grid, and the file carries both halves of it: the
+    evolved state on ``n_rho`` cell centers, and the face state on the ``n_rho + 1`` faces bounding
+    those cells. Both are required.
+
+    The consumers split two ways over which half they read. The closed loop's feedback writer and the
+    Stage 3/4 scans under ``--profiles-source transport_h5`` read the face state, because the faces
+    are the grid NEOPAX interpolates a flux file onto; the pressure fit and the convergence signal
+    read only the centered state, so a plain forward pass completes on a center-only file. The
+    contract requires the faces regardless, holding the artifact to what a closed-loop iteration
+    needs. A forward-pass-only mode would need this requirement relaxed.
+
+    The Stage 3 loader accepts either ``temperature`` or ``pressure`` and derives the
+    missing one, but the Stage 4 loader hard-requires ``temperature`` with no pressure
+    fallback. The contract therefore requires ``temperature`` (the field that satisfies
+    both readers) and keeps ``pressure`` optional. The face datasets follow the same rule.
+
+    Required: ``rho``, species-resolved ``density`` and ``temperature``, ``Er`` with no species
+    axis, and their face counterparts ``rho_face``, ``density_faces``, ``temperature_faces`` and
+    ``Er_faces``. Optional: ``pressure`` / ``pressure_faces`` and ``ts``.
+
+    Only the trailing axis of a profile is radial, so every other axis is an invariant of the whole
+    file: ``density_faces``, ``pressure`` and ``pressure_faces`` must match their density's leading
+    axes exactly, and ``Er`` / ``Er_faces`` must match it with the species entry dropped.
+    ``rho_face`` holds one more point than ``rho``, and ``ts`` holds one timestamp per slice: the
+    profiles' time axis when time-resolved, exactly one when static.
+    """
+    problems: list[str] = []
+
+    n_rho = _check_rho(data.get("rho"), problems)
+    n_face = _check_face_grid(data.get("rho_face"), n_rho, problems)
+
+    density = _check_transport_state(
+        data, names=("density", "temperature", "pressure", "Er"), coord="rho", n_points=n_rho, problems=problems
+    )
+    density_faces = _check_transport_state(
+        data,
+        names=("density_faces", "temperature_faces", "pressure_faces", "Er_faces"),
+        coord="rho_face",
+        n_points=n_face,
+        problems=problems,
+    )
+    # The two states are the same instant seen on two grids, so everything but the trailing radial
+    # axis must agree.
+    if density is not None and density_faces is not None and density.shape[:-1] != density_faces.shape[:-1]:
+        problems.append(
+            f"'density_faces' leading axes {density_faces.shape[:-1]} != 'density' leading axes "
+            f"{density.shape[:-1]} (the centered and face states are one instant on two grids, so they "
+            "share their time and species axes and differ only in the radial one)"
         )
 
     ts = data.get("ts")
@@ -177,6 +287,12 @@ def _check_transport_solution(data: dict[str, np.ndarray | None]) -> list[str]:
             problems.append(f"'ts' must be 1D (n_time,), got shape {ts.shape}")
         elif density is not None and density.ndim == 3 and ts.shape[0] != density.shape[0]:
             problems.append(f"'ts' length {ts.shape[0]} != time axis {density.shape[0]}")
+        elif density is not None and density.ndim == 2 and ts.shape[0] != 1:
+            # A static solution is one slice, so it is dated by exactly one timestamp. The Stage 3/4 loaders
+            # and the feedback writer all read ts[0], so a longer ts names times no slice corresponds to.
+            problems.append(
+                f"'ts' length {ts.shape[0]} != 1 for a single static profile slice"
+            )
         _finite(ts, "ts", problems)
 
     return problems
