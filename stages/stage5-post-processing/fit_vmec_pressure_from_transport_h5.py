@@ -1,8 +1,8 @@
 """Fit or write a VMEC-style pressure power series from NEOPAX transport HDF5 output.
 
 This script reads ``transport_solution.h5``, extracts a time slice, sums the
-species pressure profiles into a total pressure profile ``P(rho)``, converts to
-``s = rho**2``, and fits
+species pressure profiles on its **face** grid into a total pressure profile
+``P(rho)``, converts to ``s = rho**2``, and fits
 
     P(s) ~= sum_k AM[k] * s**k
 
@@ -21,11 +21,19 @@ Modes
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 import re
 
 import h5py
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# Face-grid datasets of a NEOPAX transport_solution.h5 this fit reads, named per stage because Phase 1 keeps
+# the stage scripts free of cross-stage imports. ``rho_face`` is always required; the pressure comes from
+# ``pressure_faces``, or from ``temperature_faces`` times ``density_faces``.
+_TRANSPORT_FACE_DATASETS = ("rho_face", "pressure_faces", "temperature_faces", "density_faces")
 
 
 def _load_dataset_at_time(arr: np.ndarray, time_index: int) -> np.ndarray:
@@ -53,22 +61,60 @@ def _resolve_time_index(n_times: int, *, time_index: int, final_time: bool) -> i
 
 
 def _load_total_pressure(h5_path: Path, *, time_index: int, final_time: bool) -> tuple[np.ndarray, np.ndarray, int | None]:
+    """Read one time slice of ``transport_solution.h5`` as a total pressure on its **face** grid.
+
+    NEOPAX evolves its state on the ``n_radial`` cell centers, written as ``rho`` / ``pressure`` /
+    ``temperature`` / ``density``, and those centers span neither ``rho = 0`` nor ``rho = rho_edge``. VMEC
+    evaluates the fitted power series over the whole of ``s = rho**2`` in ``[0, 1]``, so this reads the
+    ``n_radial + 1`` faces, which do span the full minor radius.
+
+    Parameters
+    ----------
+    h5_path : Path
+        NEOPAX ``transport_solution.h5``.
+    time_index : int
+        Time slice to read from a time-resolved file; negative indices count from the end.
+    final_time : bool
+        Select the last saved time slice, overriding ``time_index``.
+
+    Returns
+    -------
+    rho : numpy.ndarray
+        Face radial coordinate, shape ``(n_radial + 1,)``.
+    total_pressure : numpy.ndarray
+        Species-summed face pressure, shape ``(n_radial + 1,)``.
+    resolved_index : int or None
+        The time index actually read, or ``None`` for a static profile with no time axis.
+
+    Raises
+    ------
+    KeyError
+        If the face datasets are absent, as in a solution from a NEOPAX predating the staggered grid.
+    IndexError
+        If ``time_index`` falls outside the file's time axis.
+    """
     with h5py.File(h5_path, "r") as f:
         keys = set(f.keys())
-        if "rho" not in keys:
-            raise KeyError(f"{h5_path} is missing required dataset 'rho'")
-        rho = np.asarray(f["rho"][()], dtype=float)
+        if "rho_face" not in keys:
+            raise KeyError(
+                f"{h5_path} is missing the transport face dataset 'rho_face'. The face datasets "
+                f"({', '.join(_TRANSPORT_FACE_DATASETS)}) are written only by NEOPAX revisions that solve on "
+                "the staggered cell/face grid, and the cell-centered datasets cannot stand in: the centers "
+                "span neither rho = 0 nor rho = rho_edge, so a power series fitted on them is extrapolated "
+                "across the plasma edge VMEC evaluates it at."
+            )
+        rho = np.asarray(f["rho_face"][()], dtype=float)
         resolved_index: int | None = None
-        if "pressure" in keys:
-            pressure_all = np.asarray(f["pressure"][()])
+        if "pressure_faces" in keys:
+            pressure_all = np.asarray(f["pressure_faces"][()])
             if pressure_all.ndim >= 3:
                 resolved_index = _resolve_time_index(pressure_all.shape[0], time_index=int(time_index), final_time=final_time)
                 pressure = np.asarray(pressure_all[resolved_index], dtype=float)
             else:
                 pressure = _load_dataset_at_time(pressure_all, time_index)
-        elif "temperature" in keys and "density" in keys:
-            temperature_all = np.asarray(f["temperature"][()])
-            density_all = np.asarray(f["density"][()])
+        elif "temperature_faces" in keys and "density_faces" in keys:
+            temperature_all = np.asarray(f["temperature_faces"][()])
+            density_all = np.asarray(f["density_faces"][()])
             if temperature_all.ndim >= 3 or density_all.ndim >= 3:
                 n_times = temperature_all.shape[0] if temperature_all.ndim >= 3 else density_all.shape[0]
                 resolved_index = _resolve_time_index(n_times, time_index=int(time_index), final_time=final_time)
@@ -79,15 +125,17 @@ def _load_total_pressure(h5_path: Path, *, time_index: int, final_time: bool) ->
                 density = _load_dataset_at_time(density_all, time_index)
             pressure = density * temperature
         else:
-            raise KeyError(f"{h5_path} must contain either 'pressure' or both 'temperature' and 'density'")
+            raise KeyError(
+                f"{h5_path} must contain either 'pressure_faces' or both 'temperature_faces' and 'density_faces'"
+            )
 
     if pressure.ndim != 2:
-        raise ValueError(f"Expected species-resolved pressure with shape (species, rho), got {pressure.shape}")
+        raise ValueError(f"Expected species-resolved pressure with shape (species, rho_face), got {pressure.shape}")
 
     total_pressure = np.sum(pressure, axis=0)
     if total_pressure.shape != rho.shape:
         raise ValueError(
-            f"Pressure/rho shape mismatch: total_pressure.shape={total_pressure.shape}, rho.shape={rho.shape}"
+            f"Pressure/rho_face shape mismatch: total_pressure.shape={total_pressure.shape}, rho_face.shape={rho.shape}"
         )
     return rho, total_pressure, resolved_index
 
@@ -165,9 +213,18 @@ def _fit_from_args(args) -> tuple[np.ndarray, int | None, int]:
     )
     s = rho**2
 
+    # Drop the first point only when the grid actually starts on the magnetic axis. On a grid that does not
+    # start at rho = 0 the first point is a real innermost sample.
     if args.drop_axis and s.size > 1:
-        s = s[1:]
-        total_pressure = total_pressure[1:]
+        if np.isclose(rho[0], 0.0):
+            s = s[1:]
+            total_pressure = total_pressure[1:]
+        else:
+            logger.warning(
+                "--drop-axis was requested but the first radius is rho = %.6g, not the magnetic axis; "
+                "keeping it, because dropping it would discard a real innermost data point.",
+                float(rho[0]),
+            )
 
     # A degree-d power series has d+1 coefficients and needs at least d+1 sample
     # points to be well-posed. Clamp the effective degree to the number of points 
@@ -178,6 +235,7 @@ def _fit_from_args(args) -> tuple[np.ndarray, int | None, int]:
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=False)
 
@@ -193,7 +251,8 @@ def main() -> None:
         subparser.add_argument(
             "--drop-axis",
             action="store_true",
-            help="Exclude the magnetic axis point from the fit if rho[0] = 0 is causing trouble",
+            help="Exclude the magnetic axis point from the fit if rho_face[0] = 0 is causing trouble. "
+                 "Skipped with a warning if the first radius is not the axis.",
         )
 
     fit_parser = subparsers.add_parser("fit", help="Print fitted VMEC AM coefficients from transport_solution.h5")

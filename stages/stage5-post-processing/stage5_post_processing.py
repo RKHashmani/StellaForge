@@ -33,8 +33,8 @@ def pressure_converged(transport: Path, *, rel_tol: float) -> bool:
     Parameters
     ----------
     transport : Path
-        This pass's ``transport_solution.h5`` (species-resolved ``pressure`` or
-        ``temperature`` and ``density``, plus ``rho``).
+        This pass's ``transport_solution.h5`` (species-resolved ``pressure_faces`` or
+        ``temperature_faces`` and ``density_faces``, plus ``rho_face``).
     rel_tol : float
         Relative RMS tolerance; convergence requires the relative change below it.
 
