@@ -2,6 +2,7 @@
 
 import json
 import posixpath
+import shlex
 from pathlib import Path
 
 from src import stage3_helper, stage4_helper, stage5_helper
@@ -71,6 +72,20 @@ def _apptainer_bind_flags(cfg: dict) -> str:
     return " ".join(f"--bind {spec}" for spec in dict.fromkeys(bind_specs))
 
 
+def _docker_bind_flags(cfg: dict) -> str:
+    """Bind the workdir and absolute run roots needed by Docker jobs."""
+    bind_flags = ['-v "$PWD:/work"']
+    paths = [cfg.get("input_dir"), cfg.get("output_dir")]
+    paths.append((cfg.get("loop") or {}).get("reuse_output_dir"))
+    for path in paths:
+        if not path:
+            continue
+        p = Path(path)
+        if p.is_absolute():
+            bind_flags.append(f"-v {shlex.quote(f'{p}:{p}')}")
+    return " ".join(dict.fromkeys(bind_flags))
+
+
 def _apptainer_image_ref(image: str) -> str:
     """Map OCI-style workflow names to the native SIF images published to GHCR."""
     if "://" in image or image.endswith(".sif"):
@@ -94,7 +109,7 @@ if CONTAINER_RUNTIME == "docker":
     docker_tail = (
         f'{resolve_docker_user(config)}'
         '-e HOME=/tmp '
-        '-v "$PWD:/work" -w /work '
+        f'{_docker_bind_flags(config)} -w /work '
     )
     CONTAINER_PREFIX = f"{slot_prefix}docker run --rm --pull=missing {gpu_flag}{docker_tail}"
     # File-rewrite helpers need neither a GPU flag nor a scheduling slot.

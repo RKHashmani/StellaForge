@@ -1,0 +1,24 @@
+[workspace]
+name = "constellaration-experiment"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+version = "0.1.0"
+
+# These tasks deliberately delegate to the repository's locked `pipeline`
+# environment. The experiment owns its commands without copying the pipeline's
+# dependencies or adding dataset-specific tasks to the root workspace.
+[tasks.generate]
+cmd = "bash pipeline.sh generate"
+description = "Generate configs from ConStellaration dataset rows"
+
+[tasks.launch]
+cmd = "bash pipeline.sh launch"
+description = "Launch generated ConStellaration configs"
+
+[tasks.batch]
+cmd = "bash pipeline.sh batch"
+description = "Generate, run, track, and archive dataset batches"
+
+[tasks.test]
+cmd = "bash pipeline.sh test"
+description = "Run the ConStellaration experiment tests"
