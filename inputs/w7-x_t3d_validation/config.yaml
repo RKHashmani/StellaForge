@@ -62,11 +62,11 @@ stage3:
     # Number of rho grid points for profiles_source: analytical (the axis point is
     # dropped, so for e.g. 51 points scan 50 surfaces). The other profile sources take
     # their grid from the profile data and ignore this.
-    # Matches [geometry].n_radial in common_input.toml, so Stage 3 solves exactly the
-    # NEOPAX transport grid (8 surfaces after the axis is dropped). NEOPAX runs with
-    # [neoclassical] flux_model = "none" here, so it never reads Stage 3's flux file --
-    # only the Snakemake DAG requires it to exist. Raise this when neoclassical fluxes
-    # are actually wired into transport.
+    # Matches [geometry].n_radial + 1 in common_input.toml, the transport face grid, so Stage 3
+    # solves exactly the radii NEOPAX interpolates a flux file onto (8 surfaces after the axis is
+    # dropped). NEOPAX runs with [neoclassical] flux_model = "none" here, so it never reads Stage
+    # 3's flux file -- only the Snakemake DAG requires it to exist. Raise this when neoclassical
+    # fluxes are actually wired into transport.
     analytical_n_radii: 9
     # num_radii: 4            # subsample this many radii inside the rho window
     # rho_min: 0.1            # lower edge of the rho window
@@ -107,8 +107,10 @@ stage4:
     neopax_result: null
 
     # --- Surface selection ---
-    # Number of rho grid points for profiles_source: analytical; null falls back to
-    # [geometry].n_radial in common_input.toml (9 points, scanning 8 nonzero surfaces).
+    # Number of rho grid points for profiles_source: analytical; null falls back to the transport
+    # face grid, [geometry].n_radial + 1 in common_input.toml. NEOPAX solves on n_radial cells and
+    # interpolates flux files onto the n_radial + 1 faces that bound them, so that is where this
+    # scan samples. For n_radial = 8 that is 9 faces, scanning the 8 nonzero ones.
     analytical_n_radii: null
     # num_radii: 4            # subsample this many radii inside the rho window
     # rho_min: 0.0            # lower edge of the rho window
@@ -121,9 +123,9 @@ stage4:
     ntheta: 64
     t_max: 500.0
     average_window: 100
-    # Trinity3D estimates the saturated flux with a median of medians rather than a window mean, so
-    # match it for the benchmark. The reducer exists in the Stage 4 scan (gkx_radial_scan.py,
-    # --average-reducer) but defaults to window_mean.
+    # Trinity3D's saturated-flux estimator. Options include:
+    # "window_mean": mean over the final average_window of the trace
+    # "t3d_median": median of the trailing medians
     average_reducer: t3d_median
     sample_stride: 50
     diagnostics_stride: 1
