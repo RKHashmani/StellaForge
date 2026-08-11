@@ -361,13 +361,17 @@ model = "prescribed"
 density = [[1.0e19, 1.1e19, 1.2e19, 1.3e19, 1.4e19], [5.0e18, 5.5e18, 6.0e18, 6.5e18, 7.0e18], [5.0e18, 5.5e18, 6.0e18, 6.5e18, 7.0e18]]
 temperature = [[1000.0, 900.0, 800.0, 700.0, 600.0], [950.0, 850.0, 750.0, 650.0, 550.0], [940.0, 840.0, 740.0, 640.0, 540.0]]
 Er = [0.0, 1.0, 2.0, 3.0, 4.0]
+density_face = [[0.95e19, 1.05e19, 1.15e19, 1.25e19, 1.35e19, 1.45e19], [4.75e18, 5.25e18, 5.75e18, 6.25e18, 6.75e18, 7.25e18], [4.75e18, 5.25e18, 5.75e18, 6.25e18, 6.75e18, 7.25e18]]
+temperature_face = [[1050.0, 950.0, 850.0, 750.0, 650.0, 550.0], [1000.0, 900.0, 800.0, 700.0, 600.0, 500.0], [990.0, 890.0, 790.0, 690.0, 590.0, 490.0]]
+Er_face = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
 """
 
 
 # The snapshot tests elsewhere call _build_prescribed_snapshot directly, so the cmd_prepare branch that routes
 # --profiles-source=prescribed to it (with no NEOPAX result) would go untested without this. Running the real
 # cmd_prepare against a prescribed template and a synthetic VMEC file must succeed without any transport file, record
-# the source in the manifest, and scan exactly the prescribed 5-point grid minus the magnetic axis.
+# the source in the manifest, and scan exactly the transport face grid minus the magnetic axis. [geometry].n_radial = 5
+# cells means 6 faces at linspace(0, 1, 6), of which the axis face is dropped, so 5 surfaces are scanned.
 def test_cmd_prepare_dispatches_prescribed_source(tmp_path: Path) -> None:
     from tests.helpers.synthetic import write_wout
 
@@ -388,10 +392,11 @@ def test_cmd_prepare_dispatches_prescribed_source(tmp_path: Path) -> None:
     assert "spectrax_root" not in manifest
     assert manifest["profiles_source"] == "prescribed"
     assert not manifest.get("neopax_result")
-    assert [run["rho"] for run in manifest["runs"]] == [0.25, 0.5, 0.75, 1.0]
-    # The analytical fallback also lands on the 5-point [geometry] grid and profiles_source echoes the CLI, so only a
+    assert [run["rho"] for run in manifest["runs"]] == pytest.approx([0.2, 0.4, 0.6, 0.8, 1.0])
+    # The analytical fallback also lands on the 6-point face grid and profiles_source echoes the CLI, so only a
     # snapshot-derived value proves the prescribed builder ran; the analytical Er is quadratic in rho, never this ramp.
-    assert manifest["source_er"] == [0.0, 1.0, 2.0, 3.0, 4.0]
+    # It is the Er_face ramp rather than the cell-centered Er, which pins that the face arrays are what got read.
+    assert manifest["source_er"] == [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
 
 
 # --- _runtime_toml_text ---
@@ -511,3 +516,49 @@ def test_prepare_shaping_flags_default_to_none() -> None:
     args = scan.build_parser().parse_args(["prepare"])
     assert (args.nx, args.ny, args.ntheta) == (None, None, None)
     assert (args.t_max, args.sample_stride, args.diagnostics_stride) == (None, None, None)
+
+
+# --- load_neopax_snapshot: format dispatch ---
+
+# `load_neopax_snapshot` serves two unrelated file layouts: a NEOPAX transport_solution.h5 and a flat NTSS-like file.
+# Dispatch happens on the file's shape before parsing, so a recognisable NEOPAX file keeps its own diagnostic.
+
+_SPECIES = [
+    scan.SpeciesMeta(name="e", charge=-1.0, mass_mp=0.000544617),
+    scan.SpeciesMeta(name="D", charge=1.0, mass_mp=2.0),
+    scan.SpeciesMeta(name="T", charge=1.0, mass_mp=3.0),
+]
+
+
+def _write_ntss_like(path: Path, n_r: int = 6) -> Path:
+    """Write a flat NTSS-like file: a radius, an Er, and one density/temperature pair per species."""
+    with h5py.File(path, "w") as f:
+        f.create_dataset("r", data=np.linspace(0.0, 1.0, n_r))
+        f.create_dataset("Er", data=np.linspace(-1.0, 3.0, n_r))
+        for name in ("ne", "nD", "nT"):
+            f.create_dataset(name, data=np.linspace(1.0, 0.2, n_r))
+        for name in ("Te", "TD", "TT"):
+            f.create_dataset(name, data=np.linspace(4.0, 0.5, n_r))
+    return path
+
+
+# A NEOPAX transport solution written before the staggered grid is recognisable as a NEOPAX file, so the reader's own
+# "missing the transport face datasets" error is the useful one and must reach the caller. Falling through to the NTSS
+# parser would report that the file lacks `r` and `Er`, which is true but tells the user nothing about the real cause.
+def test_load_neopax_snapshot_surfaces_the_missing_face_diagnostic(tmp_path: Path) -> None:
+    from tests.helpers.synthetic import write_transport_solution
+
+    path = write_transport_solution(
+        tmp_path / "old_pin.h5",
+        rho=np.linspace(0.1, 0.9, 5),
+        density=np.ones((3, 5)), temperature=np.ones((3, 5)), er=np.zeros(5),
+    )
+    with pytest.raises(KeyError, match="transport face datasets"):
+        scan.load_neopax_snapshot(path, _SPECIES, time_index=-1)
+
+
+# A genuinely NTSS-shaped file routes to the NTSS parser.
+def test_load_neopax_snapshot_still_falls_back_to_the_ntss_parser(tmp_path: Path) -> None:
+    snap = scan.load_neopax_snapshot(_write_ntss_like(tmp_path / "ntss.h5"), _SPECIES, time_index=-1)
+    assert snap.density.shape == (3, 6)
+    assert_allclose(snap.rho, np.linspace(0.0, 1.0, 6), rtol=1e-12)

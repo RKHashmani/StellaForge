@@ -47,6 +47,9 @@ import h5py
 import numpy as np
 from scipy.constants import elementary_charge, proton_mass
 
+# Face-grid datasets required of a NEOPAX transport_solution.h5, alongside its cell-centered state.
+_TRANSPORT_FACE_DATASETS = ("rho_face", "density_faces", "Er_faces")
+
 NEOPAX_DENSITY_REFERENCE_M3 = 1.0e20
 NEOPAX_TEMPERATURE_REFERENCE_EV = 1.0e3
 SFINCS_REFERENCE_R_M = 1.0
@@ -137,27 +140,57 @@ def _parse_species_from_config(cfg: dict[str, Any]) -> list[SpeciesMeta]:
 
 
 def _load_transport_snapshot(h5_path: Path, *, time_index: int) -> TransportSnapshot:
+    """Read one time slice of a NEOPAX ``transport_solution.h5`` on its **face** grid.
+
+    NEOPAX evolves its state on the ``n_radial`` cell centers and writes those as ``rho`` /
+    ``density`` / ``temperature`` / ``Er``, but the centers span neither ``rho = 0`` nor
+    ``rho = rho_edge``. A scan built from them would write a flux file stopping short at both ends,
+    where NEOPAX's own interpolation returns NaN. The ``n_radial + 1`` faces are the grid it
+    interpolates a flux file onto, so this reads the ``*_faces`` datasets instead, the same face
+    state the closed loop's prescribed block carries.
+
+    Raises
+    ------
+    KeyError
+        If the face datasets are absent, as in a solution from a NEOPAX predating the staggered
+        grid. Falling back to the centers would silently sample the wrong radii.
+    IndexError
+        If ``time_index`` falls outside the file's time axis.
+    """
     with h5py.File(h5_path, "r") as f:
         keys = set(f.keys())
         if "rho" not in keys or "density" not in keys or "Er" not in keys:
             raise KeyError(f"{h5_path} is missing required NEOPAX transport datasets.")
+        missing = [name for name in _TRANSPORT_FACE_DATASETS if name not in keys]
+        if missing:
+            raise KeyError(
+                f"{h5_path} is missing the transport face datasets: {', '.join(missing)}. They are written "
+                "only by NEOPAX revisions that solve on the staggered cell/face grid, and the cell-centered "
+                "datasets cannot stand in: they span neither rho = 0 nor rho = rho_edge, so a flux file built "
+                "from them leaves both ends of NEOPAX's own grid outside its knots."
+            )
 
-        rho = np.asarray(f["rho"][()], dtype=np.float64)
-        density_all = np.asarray(f["density"][()], dtype=np.float64)
-        er_all = np.asarray(f["Er"][()], dtype=np.float64)
+        rho = np.asarray(f["rho_face"][()], dtype=np.float64)
+        density_all = np.asarray(f["density_faces"][()], dtype=np.float64)
+        er_all = np.asarray(f["Er_faces"][()], dtype=np.float64)
 
-        if "temperature" in keys:
-            temperature_all = np.asarray(f["temperature"][()], dtype=np.float64)
-        elif "pressure" in keys:
-            pressure_all = np.asarray(f["pressure"][()], dtype=np.float64)
+        if "temperature_faces" in keys:
+            temperature_all = np.asarray(f["temperature_faces"][()], dtype=np.float64)
+        elif "pressure_faces" in keys:
+            pressure_all = np.asarray(f["pressure_faces"][()], dtype=np.float64)
             density_safe = np.maximum(density_all, 1.0e-30)
             temperature_all = pressure_all / density_safe
         else:
-            raise KeyError(f"{h5_path} must contain either temperature or pressure.")
+            raise KeyError(f"{h5_path} must contain either temperature_faces or pressure_faces.")
 
         ts = np.asarray(f["ts"][()], dtype=np.float64) if "ts" in keys else None
 
     if density_all.ndim == 2:
+        if int(time_index) != -1:
+            raise ValueError(
+                f"{h5_path} stores a single static profile slice with no time axis, so --time-index "
+                f"{time_index} cannot be selected"
+            )
         idx = 0
         density = density_all
         temperature = temperature_all
@@ -193,11 +226,18 @@ def _build_standard_analytical_snapshot(
     cfg: dict[str, Any],
     *,
     n_species: int,
-    n_radial: int,
+    n_points: int,
 ) -> TransportSnapshot:
+    """Evaluate the analytical profile model on ``n_points`` radii spanning ``[0, rho_edge]``.
+
+    ``n_points`` is a literal sample count, not a cell count. NEOPAX's cell count ``n_radial``
+    describes ``n_radial + 1`` faces, so a caller wanting the scan to land exactly on the transport
+    face grid passes ``n_radial + 1``. This scan's default oversamples that grid instead, which is a
+    valid input for NEOPAX to interpolate from as long as it still spans ``[0, rho_edge]``.
+    """
     profile_cfg = cfg.get("profiles", {})
     rho_edge = float(cfg.get("geometry", {}).get("rho_edge", 1.0))
-    rho = np.linspace(0.0, rho_edge, int(n_radial), dtype=np.float64)
+    rho = np.linspace(0.0, rho_edge, int(n_points), dtype=np.float64)
     x = rho / max(float(rho[-1]) if rho.size else 1.0, 1.0e-30)
 
     n0 = _match_species_factors(profile_cfg.get("n0", profile_cfg.get("ni0", profile_cfg.get("ne0", 4.21))), n_species, default=4.21)
@@ -253,8 +293,61 @@ def _require_profile_array(profile_cfg: dict[str, Any], key: str, *, ndim: int) 
     return array
 
 
+def _require_face_arrays(
+    profile_cfg: dict[str, Any], *, n_species: int, n_radial: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Read and shape-check the ``[profiles]`` face arrays against ``n_radial`` cells.
+
+    Parameters
+    ----------
+    profile_cfg : dict[str, Any]
+        The parsed ``[profiles]`` section.
+    n_species : int
+        Number of species the run expects.
+    n_radial : int
+        Number of transport cells, so the arrays must carry ``n_radial + 1`` radial entries.
+
+    Returns
+    -------
+    tuple of numpy.ndarray
+        ``(density_face, temperature_face, er_face)`` in the block's SI units.
+
+    Raises
+    ------
+    ValueError
+        If an array is absent or does not span the ``n_radial + 1`` cell faces.
+    """
+    n_faces = n_radial + 1
+    density_face = _require_profile_array(profile_cfg, "density_face", ndim=2)
+    temperature_face = _require_profile_array(profile_cfg, "temperature_face", ndim=2)
+    er_face = _require_profile_array(profile_cfg, "Er_face", ndim=1)
+    for key, array in (("density_face", density_face), ("temperature_face", temperature_face)):
+        if array.shape != (n_species, n_faces):
+            raise ValueError(
+                f"[profiles].{key} has shape {array.shape}, expected {(n_species, n_faces)}: one row per "
+                f"species and one column per cell face, which is [geometry].n_radial + 1"
+            )
+    if er_face.size != n_faces:
+        raise ValueError(
+            f"[profiles].Er_face holds {er_face.size} points, expected {n_faces} to span the same cell "
+            "faces as [profiles].density_face"
+        )
+    return density_face, temperature_face, er_face
+
+
 def _build_prescribed_snapshot(cfg: dict[str, Any], *, n_species: int) -> TransportSnapshot:
     """Build a snapshot from the prescribed profile arrays stored in the config ``[profiles]`` section.
+
+    The block carries both of NEOPAX's radial grids. ``density`` / ``temperature`` / ``Er`` hold one
+    value per **cell center** and are what NEOPAX itself reads back, so they are validated here but
+    not used. ``density_face`` / ``temperature_face`` / ``Er_face`` hold one value per **cell face**,
+    and the snapshot is built from those: the scan samples fluxes on the faces because that is the
+    grid NEOPAX interpolates a flux file onto.
+
+    The face values are never reconstructed from the centered ones. NEOPAX builds them under the
+    run's own boundary models, so a block missing them is rejected rather than extrapolated -- an
+    extrapolation invented here would disagree with the solver wherever the outer boundary is not a
+    plain Dirichlet, which is exactly the case for the Robin temperature edge the quick run uses.
 
     The prescribed arrays are SI (density m^-3, temperature eV), so both are divided by the
     NEOPAX reference values to reach the snapshot units of 1e20 m^-3 and keV. Er is kV/m in
@@ -301,14 +394,24 @@ def _build_prescribed_snapshot(cfg: dict[str, Any], *, n_species: int) -> Transp
             f"[profiles] arrays hold {n_radial} radial points, expected {int(geometry_cfg['n_radial'])} "
             "to match [geometry].n_radial"
         )
-    if n_radial < 3:
-        raise ValueError(f"[profiles] arrays hold {n_radial} radial points, expected at least 3 for radial gradients")
+    # The gradients are taken on the faces, so the floor is a face count: three faces for np.gradient's
+    # edge_order=2. That is two cells, which also clears NEOPAX's own two-cell minimum for extrapolating
+    # its outer boundary value from the cell-centered arrays this same block carries.
+    if n_radial + 1 < 3:
+        raise ValueError(
+            f"[profiles] arrays hold {n_radial} cells, giving {n_radial + 1} faces; the radial gradients "
+            "need at least 3 faces"
+        )
+
+    density_face, temperature_face, er_face = _require_face_arrays(
+        profile_cfg, n_species=n_species, n_radial=n_radial
+    )
     rho_edge = float(geometry_cfg.get("rho_edge", 1.0))
     return TransportSnapshot(
-        rho=np.linspace(0.0, rho_edge, n_radial, dtype=np.float64),
-        density=density / NEOPAX_DENSITY_REFERENCE_M3,
-        temperature=temperature / NEOPAX_TEMPERATURE_REFERENCE_EV,
-        er=er,
+        rho=np.linspace(0.0, rho_edge, n_radial + 1, dtype=np.float64),
+        density=density_face / NEOPAX_DENSITY_REFERENCE_M3,
+        temperature=temperature_face / NEOPAX_TEMPERATURE_REFERENCE_EV,
+        er=er_face,
         time_value=None,
     )
 
@@ -1031,7 +1134,7 @@ def _prepare(args: argparse.Namespace) -> tuple[dict[str, Any], list[Path]]:
         snapshot = _build_standard_analytical_snapshot(
             cfg,
             n_species=len(species),
-            n_radial=int(args.analytical_n_radii),
+            n_points=int(args.analytical_n_radii),
         )
     elif profiles_source == "prescribed":
         transport_solution = None
