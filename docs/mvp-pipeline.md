@@ -484,14 +484,25 @@ Each iteration runs as an independent Snakemake pass with `input_dir`/`output_di
 The driver chains iterations through both artifacts: it seeds iteration N+1's `input/` with iteration N's evolved boundary and its prescribed-profiles `common_input.toml`, re-seeding the Stage 3/4 configs and run config from the base each pass. From iteration 2 it also writes `loop_overrides.yaml` into that iteration's `input/`, setting `stage3.sfincs_jax.profiles_source` and `stage4.gkx.profiles_source` to `prescribed` so both stages read the seeded arrays instead of rebuilding analytical profiles. When [per-stage rerun flags](#per-stage-rerun-flags) freeze part of the pipeline, the same file also records the rerun map and the iteration 1 tree its artifacts are reused from, and the `prescribed` switch is written only for whichever of Stages 3 and 4 still rerun. That file is appended **after** the base run config under the single `--configfile` flag, which Snakemake deep-merges in order with later files taking precedence; a second `--configfile` occurrence would replace the first and silently drop the base config. Committed inputs and templates are never mutated; every artifact lives under `outputs/<run>/loop/`.
 
 > [!NOTE]
-> From iteration 2 the Stage 3 scan therefore runs on the transport grid (`[geometry].n_radial` points, less the dropped magnetic-axis point, so 4 surfaces for quick_run) rather than the 51-point analytical grid `analytical_n_radii` requests, because the prescribed arrays exist only on the transport grid. This mirrors what `profiles_source: transport_h5` already does. Stage 4's quick-run grid is unchanged, since its `analytical_n_radii: null` already falls back to `[geometry].n_radial`.
+> From iteration 2 the Stage 3 scan therefore runs on the transport face grid (`[geometry].n_radial + 1` faces, less the dropped magnetic-axis face, so 5 surfaces for quick_run) rather than the 51-point analytical grid `analytical_n_radii` requests, because the prescribed arrays exist only on the transport grid. This mirrors what `profiles_source: transport_h5` already does. Stage 4 runs on that same grid in every iteration, since its `analytical_n_radii: null` falls back to `[geometry].n_radial + 1`.
 
 > [!NOTE]
 > A plain forward pass (e.g. `pixi run driftless-star-fwd --configfile inputs/quick_run/config.yaml --cores 4`) builds `rule all` = the Stage 5 transport solution and **stops at Stage 5**, so it never runs the feedback step. The loop is opt-in: it is reached only by targeting the signal file, which `ouroboros` does for you.
 
 #### Prescribed `[profiles]` contract
 
-The emitted block stores profile values only, with no radial coordinate: rows follow `[species].names` and columns follow the radial grid `linspace(0, rho_edge, n_radial)` rebuilt from `[geometry]` (`rho_edge` defaults to `1.0`), which is the grid every reader reconstructs. The writer hard-fails when the transport solution's `rho` does not match that grid, so a mismatch fails the iteration instead of silently prescribing misaligned profiles.
+The emitted block stores profile values only, with no radial coordinate, so every reader rebuilds the grid from `[geometry]` alone (`rho_edge` defaults to `1.0`). NEOPAX solves on a staggered finite-volume grid, so the block carries **both** of its radial grids and the readers differ in which one they take:
+
+| Keys | Columns | Grid | Read by |
+|---|---|---|---|
+| `density`, `temperature`, `Er` | `n_radial` | cell centers, the midpoints of `linspace(0, rho_edge, n_radial + 1)` | NEOPAX |
+| `density_face`, `temperature_face`, `Er_face` | `n_radial + 1` | cell faces, `linspace(0, rho_edge, n_radial + 1)` | Stages 3 and 4 |
+
+Rows follow `[species].names` in both. The split is not a convenience: NEOPAX's `PrescribedProfileModel` requires exactly one value per cell and derives the outer boundary itself, so the centered arrays cannot grow to the face count without breaking the solver that reads this same file back. Stages 3 and 4 need the faces because that is the grid NEOPAX interpolates a flux file onto.
+
+The face values are copied verbatim from the transport solution's own `density_faces` / `temperature_faces` / `Er_faces` datasets, never reconstructed. NEOPAX builds them under that run's boundary models, so an extrapolation invented downstream would disagree with the solver wherever the outer boundary is not a plain Dirichlet — which is the case for the Robin temperature edge `quick_run` uses. A transport solution predating those datasets is rejected by the writer rather than worked around.
+
+The writer hard-fails when the transport solution's `rho` or `rho_face` does not match the grid `[geometry]` describes, so a mismatch fails the iteration instead of silently prescribing misaligned profiles.
 
 Values are SI, matching what NEOPAX's prescribed-profile model consumes: density in m^-3 and temperature in eV. The transport solution stores 1e20 m^-3 and keV, so the writer scales density by 1e20 and temperature by 1e3; `Er` is already in kV/m and passes through unchanged. The Stage 3 and 4 readers divide back to their internal 1e20 m^-3 and keV units.
 
