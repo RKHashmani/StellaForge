@@ -399,7 +399,7 @@ def _build_standard_analytical_snapshot(
 ) -> ProfileSnapshot:
     profile_cfg = cfg.get("profiles", {})
     rho_edge = float(cfg.get("geometry", {}).get("rho_edge", 1.0))
-    rho = np.linspace(0.0, rho_edge, int(n_radial), dtype=np.float64)
+    rho = np.linspace(0.0, rho_edge, int(n_radial) + 1, dtype=np.float64)
     x = rho / max(float(rho[-1]) if rho.size else 1.0, 1.0e-30)
 
     n0 = _match_species_factors(profile_cfg.get("n0", profile_cfg.get("ni0", profile_cfg.get("ne0", 4.21))), n_species, default=4.21)
@@ -507,7 +507,7 @@ def _build_prescribed_snapshot(cfg: dict[str, Any], *, n_species: int) -> Profil
         raise ValueError(f"[profiles] arrays hold {n_radial} radial points, expected at least 3 for radial gradients")
     rho_edge = float(geometry_cfg.get("rho_edge", 1.0))
     return ProfileSnapshot(
-        rho=np.linspace(0.0, rho_edge, n_radial, dtype=np.float64),
+        rho=np.linspace(0.0, rho_edge, n_radial + 1, dtype=np.float64),
         density=density / NEOPAX_DENSITY_REFERENCE_M3,
         temperature=temperature / NEOPAX_TEMPERATURE_REFERENCE_EV,
         er=er,

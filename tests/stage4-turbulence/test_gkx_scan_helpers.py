@@ -90,9 +90,9 @@ def _expand_inputs(n_species: int = 3, n: int = 2) -> dict:
     }
 
 
-# `_expand_axis_zero_if_needed` re-inserts the magnetic-axis point (rho = 0) that the scan skipped, but only when the
-# run manifest describes it. With an empty manifest (no `source_rho`), it should do nothing: this asserts the arrays
-# come back unchanged, still length 2 on the radius axis.
+# `_expand_axis_zero_if_needed` re-inserts the magnetic-axis face (rho = 0) that the scan skipped, but only when the
+# run manifest describes the full face grid. With an empty manifest (no `source_rho`), it should do nothing: this
+# asserts the arrays come back unchanged, still length 2 on the radius axis.
 def test_expand_passthrough_without_source_rho() -> None:
     arrays = _expand_inputs()
     out = scan._expand_axis_zero_if_needed({}, **arrays)
@@ -102,10 +102,11 @@ def test_expand_passthrough_without_source_rho() -> None:
     assert out[9].shape == arrays["gamma_neopax"].shape
 
 
-# The happy path where all guards pass. Given a manifest whose `source_rho` is the scanned radii plus a leading 0, it
-# prepends the axis point everywhere: the radial coordinate becomes [0, 0.5, 1.0], the physical radius is `a_minor *
-# rho`, toroidal flux is `rho^2`, `Er` is taken from the manifest, and the flux arrays gain a new zero-filled axis
-# column while their existing columns are preserved. Each assertion checks one of those reconstructed quantities.
+# The happy path where all guards pass. Given a manifest whose `source_rho` is the full face grid and whose executed
+# runs covered every non-axis face, it prepends the missing axis point everywhere: the radial coordinate becomes
+# [0, 0.5, 1.0], the physical radius is `a_minor * rho`, toroidal flux is `rho^2`, `Er` is taken from the manifest,
+# and the flux arrays gain a new zero-filled axis column while their existing columns are preserved. Each assertion
+# checks one of those reconstructed quantities.
 def test_expand_prepends_axis_zero() -> None:
     manifest = {"source_rho": [0.0, 0.5, 1.0], "source_er": [0.0, 1.5, 3.0], "geometry": {"a_minor": 2.0}}
     arrays = _expand_inputs()  # rho size 2, rho_index [1, 2]
@@ -136,10 +137,10 @@ def test_expand_er_zero_filled_on_source_er_size_mismatch() -> None:
     assert_allclose(out[4], 0.0)
 
 
-# Expansion is only safe if the scanned surfaces were exactly indices [1, 2] (i.e. the axis at index 0 really was the
-# only one skipped). Here `rho_index` is [0, 1] instead, so a guard trips and the helper refuses to expand. This asserts
-# the arrays are returned unchanged (radius axis stays 2), protecting against inserting an axis point when the data
-# doesn't line up.
+# Expansion is only safe if the scanned faces were exactly indices [1, 2] (i.e. the axis face at index 0 really was
+# the only one skipped). Here `rho_index` is [0, 1] instead, so a guard trips and the helper refuses to expand. This
+# asserts the arrays are returned unchanged (radius axis stays 2), protecting against inserting an axis point when the
+# data doesn't line up.
 def test_expand_passthrough_on_index_mismatch() -> None:
     manifest = {"source_rho": [0.0, 0.5, 1.0], "geometry": {"a_minor": 2.0}}
     arrays = _expand_inputs()
