@@ -405,7 +405,7 @@ def _write_template(tmp_path: Path, body: str) -> str:
     return str(path)
 
 
-def _prepared_deck(tmp_path: Path, *extra_argv: str) -> dict:
+def _prepared_runtime_toml(tmp_path: Path, *extra_argv: str) -> dict:
     from tests.helpers.synthetic import write_wout
 
     config = tmp_path / "common_input.toml"
@@ -425,30 +425,89 @@ def _prepared_deck(tmp_path: Path, *extra_argv: str) -> dict:
     return tomllib.loads(Path(manifest["runs"][0]["config_path"]).read_text())
 
 
-# A deck that names no [output] table leaves resolved_diagnostics unreachable, so every generated deck must carry
-# the table. The hard default matches GKX's own, making a switched-off deck always an explicit act.
-def test_prepare_deck_defaults_resolved_diagnostics_on(tmp_path: Path) -> None:
-    cfg = _prepared_deck(tmp_path, "--gkx-template", _write_template(tmp_path, ""))
+# A template that names no [output] table leaves resolved_diagnostics unreachable, so every generated runtime TOML must
+# carry the table. The hard default matches GKX's own, making a switched-off run always an explicit act.
+def test_runtime_toml_defaults_resolved_diagnostics_on(tmp_path: Path) -> None:
+    cfg = _prepared_runtime_toml(tmp_path, "--gkx-template", _write_template(tmp_path, ""))
     assert cfg["output"]["resolved_diagnostics"] is True
 
 
 # The template tier is reachable only while the CLI flag stays None when the flag is absent. Giving
-# --resolved-diagnostics an argparse default of True or False would pin every deck to that value and the template's
-# resolved_diagnostics would silently stop taking effect, which is what this asserts against.
-def test_prepare_deck_takes_resolved_diagnostics_from_the_template(tmp_path: Path) -> None:
+# --resolved-diagnostics an argparse default of True or False would pin every runtime TOML to that value and the
+# template's resolved_diagnostics would silently stop taking effect, which is what this asserts against.
+def test_runtime_toml_takes_resolved_diagnostics_from_the_template(tmp_path: Path) -> None:
     template = _write_template(tmp_path, "[output]\nresolved_diagnostics = false\n")
-    cfg = _prepared_deck(tmp_path, "--gkx-template", template)
+    cfg = _prepared_runtime_toml(tmp_path, "--gkx-template", template)
     assert cfg["output"]["resolved_diagnostics"] is False
 
 
-# The CLI is the top tier, so an explicit --resolved-diagnostics overrides a template that switched the spectra off.
-def test_prepare_deck_cli_resolved_diagnostics_beats_the_template(tmp_path: Path) -> None:
+# --resolved-diagnostics passed on the command line overrides the same key in a template that switched the spectra off.
+def test_runtime_toml_cli_resolved_diagnostics_beats_the_template(tmp_path: Path) -> None:
     template = _write_template(tmp_path, "[output]\nresolved_diagnostics = false\n")
-    cfg = _prepared_deck(tmp_path, "--gkx-template", template, "--resolved-diagnostics")
+    cfg = _prepared_runtime_toml(tmp_path, "--gkx-template", template, "--resolved-diagnostics")
     assert cfg["output"]["resolved_diagnostics"] is True
 
 
-# The off-flag has to reach the deck on its own, without a template that already switched the spectra off.
-def test_prepare_deck_cli_switches_resolved_diagnostics_off(tmp_path: Path) -> None:
-    cfg = _prepared_deck(tmp_path, "--no-resolved-diagnostics")
+# The off-flag has to reach the runtime TOML on its own, without a template that already switched the spectra off.
+def test_runtime_toml_cli_switches_resolved_diagnostics_off(tmp_path: Path) -> None:
+    cfg = _prepared_runtime_toml(tmp_path, "--no-resolved-diagnostics")
     assert cfg["output"]["resolved_diagnostics"] is False
+
+
+# Shaping values distinct from every hard fallback, so a resolved value matching one of these came from the template.
+_SHAPING_TEMPLATE = """\
+[grid]
+Nx = 24
+Ny = 20
+ntheta = 18
+
+[time]
+t_max = 33.0
+sample_stride = 7
+diagnostics_stride = 5
+"""
+
+
+# The chain resolves each shaping setting as CLI flag, then GKX template, then hard fallback. An empty template with no
+# flags reaches the last tier, which holds GKX's own default for every key GKX defines one for. GKX leaves ntheta unset,
+# so the 48 there is the bridge's own.
+def test_runtime_toml_shaping_falls_back_to_gkx_defaults(tmp_path: Path) -> None:
+    cfg = _prepared_runtime_toml(tmp_path, "--gkx-template", _write_template(tmp_path, ""))
+    assert (cfg["grid"]["Nx"], cfg["grid"]["Ny"], cfg["grid"]["ntheta"]) == (48, 48, 48)
+    assert cfg["time"]["t_max"] == 100.0
+    assert (cfg["time"]["sample_stride"], cfg["time"]["diagnostics_stride"]) == (1, 1)
+
+
+# Every shaping flag has to stay None when absent, otherwise argparse fills its dest, the CLI tier always wins and the
+# template tier is unreachable. The template values here differ from the hard fallbacks, so these assertions pass only
+# while the template tier really decides.
+def test_runtime_toml_takes_shaping_from_the_template(tmp_path: Path) -> None:
+    cfg = _prepared_runtime_toml(tmp_path, "--gkx-template", _write_template(tmp_path, _SHAPING_TEMPLATE))
+    assert (cfg["grid"]["Nx"], cfg["grid"]["Ny"], cfg["grid"]["ntheta"]) == (24, 20, 18)
+    assert cfg["time"]["t_max"] == 33.0
+    assert (cfg["time"]["sample_stride"], cfg["time"]["diagnostics_stride"]) == (7, 5)
+
+
+# A shaping flag passed on the command line overrides the same key in the template, so all six reach the runtime TOML.
+def test_runtime_toml_cli_shaping_beats_the_template(tmp_path: Path) -> None:
+    cfg = _prepared_runtime_toml(
+        tmp_path,
+        "--gkx-template", _write_template(tmp_path, _SHAPING_TEMPLATE),
+        "--nx", "64",
+        "--ny", "56",
+        "--ntheta", "22",
+        "--t-final", "77.0",
+        "--sample-stride", "9",
+        "--diagnostics-stride", "3",
+    )
+    assert (cfg["grid"]["Nx"], cfg["grid"]["Ny"], cfg["grid"]["ntheta"]) == (64, 56, 22)
+    assert cfg["time"]["t_max"] == 77.0
+    assert (cfg["time"]["sample_stride"], cfg["time"]["diagnostics_stride"]) == (9, 3)
+
+
+# The parser-level counterpart to the template test above, catching a reintroduced argparse default at the parser
+# rather than through the resolved runtime TOML. t_max is shared by --t-max and its --t-final alias.
+def test_prepare_shaping_flags_default_to_none() -> None:
+    args = scan.build_parser().parse_args(["prepare"])
+    assert (args.nx, args.ny, args.ntheta) == (None, None, None)
+    assert (args.t_max, args.sample_stride, args.diagnostics_stride) == (None, None, None)
