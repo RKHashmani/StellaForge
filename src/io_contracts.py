@@ -129,11 +129,17 @@ def _check_species_profile(
     _finite(arr, name, problems)
 
 
-def _check_face_grid(rho_face: np.ndarray | None, n_rho: int | None, problems: list[str]) -> int | None:
-    """Check the required 1D ``rho_face`` coordinate, returning its length or ``None``.
+def _check_face_grid(
+    rho_face: np.ndarray | None, rho: np.ndarray | None, n_rho: int | None, problems: list[str]
+) -> int | None:
+    """Check the required 1D ``rho_face`` coordinate against ``rho``, returning its length or ``None``.
 
-    The faces bound the cells, so a solution on ``n_rho`` centers has exactly ``n_rho + 1`` faces.
-    Any other length means the two grids describe different geometry.
+    The faces bound the cells, so a solution on ``n_rho`` centers has exactly ``n_rho + 1`` faces, they march
+    strictly outward, and each center sits midway between the two faces bounding it. A grid failing any of those
+    describes different geometry than ``rho`` does.
+
+    The last two checks compare the grids elementwise, so they run only once the length check has passed;
+    ``n_rho`` of ``None`` (``rho`` missing or not 1D) skips all three.
     """
     n_face: int | None = None
     if _require(rho_face, "rho_face", problems):
@@ -141,12 +147,42 @@ def _check_face_grid(rho_face: np.ndarray | None, n_rho: int | None, problems: l
             problems.append(f"'rho_face' must be 1D, got shape {rho_face.shape}")
         else:
             n_face = rho_face.shape[0]
-            if n_rho is not None and n_face != n_rho + 1:
-                problems.append(
-                    f"'rho_face' holds {n_face} faces, expected one more than the {n_rho} cell centers in 'rho'"
-                )
+            if n_rho is not None and rho is not None:
+                if n_face != n_rho + 1:
+                    problems.append(
+                        f"'rho_face' holds {n_face} faces, expected one more than the {n_rho} cell centers in 'rho'"
+                    )
+                else:
+                    _check_face_geometry(rho_face, rho, problems)
         _finite(rho_face, "rho_face", problems)
     return n_face
+
+
+def _check_face_geometry(rho_face: np.ndarray, rho: np.ndarray, problems: list[str]) -> None:
+    """Record problems when the faces do not march outward or do not bracket the centers.
+
+    Called only for grids whose lengths already agree (``n_rho + 1`` faces for ``n_rho`` centers).
+    The midpoint rule is NEOPAX's own definition of the grid, ``_geometry_models.py``:
+    ``rho_grid = 0.5 * (rho_grid_half[:-1] + rho_grid_half[1:])``. Strictly increasing faces plus
+    that rule make the centers strictly increasing too, so the centers need no separate check.
+    Default ``numpy.allclose`` tolerances absorb the file's float32 storage.
+    """
+    increasing = np.diff(rho_face) > 0.0
+    if not np.all(increasing):
+        first = int(np.argmin(increasing))
+        problems.append(
+            f"'rho_face' must increase strictly outward, but rho_face[{first}] = {rho_face[first]} is followed "
+            f"by rho_face[{first + 1}] = {rho_face[first + 1]}"
+        )
+
+    midpoints = 0.5 * (rho_face[:-1] + rho_face[1:])
+    if not np.allclose(rho, midpoints):
+        worst = int(np.argmax(np.abs(rho - midpoints)))
+        problems.append(
+            f"'rho' must hold the midpoints of 'rho_face', which is how NEOPAX defines its cell centers "
+            f"(rho_grid = 0.5 * (rho_grid_half[:-1] + rho_grid_half[1:])), but rho[{worst}] = {rho[worst]} "
+            f"!= {midpoints[worst]}"
+        )
 
 
 def _check_transport_state(
@@ -254,13 +290,16 @@ def _check_transport_solution(data: dict[str, np.ndarray | None]) -> list[str]:
     Only the trailing axis of a profile is radial, so every other axis is an invariant of the whole
     file: ``density_faces``, ``pressure`` and ``pressure_faces`` must match their density's leading
     axes exactly, and ``Er`` / ``Er_faces`` must match it with the species entry dropped.
-    ``rho_face`` holds one more point than ``rho``, and ``ts`` holds one timestamp per slice: the
-    profiles' time axis when time-resolved, exactly one when static.
+    The two radial grids must describe one geometry: ``rho_face`` holds one more point than ``rho``
+    and increases strictly outward, with each ``rho`` entry the midpoint of the two faces bounding
+    it, as NEOPAX builds them. ``ts`` holds one timestamp per slice: the profiles' time axis when
+    time-resolved, exactly one when static.
     """
     problems: list[str] = []
 
-    n_rho = _check_rho(data.get("rho"), problems)
-    n_face = _check_face_grid(data.get("rho_face"), n_rho, problems)
+    rho = data.get("rho")
+    n_rho = _check_rho(rho, problems)
+    n_face = _check_face_grid(data.get("rho_face"), rho, n_rho, problems)
 
     density = _check_transport_state(
         data, names=("density", "temperature", "pressure", "Er"), coord="rho", n_points=n_rho, problems=problems

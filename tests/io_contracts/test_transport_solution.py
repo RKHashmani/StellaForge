@@ -10,9 +10,10 @@ either and derives the missing one, while the Stage 4 loader hard-requires ``tem
 with no pressure fallback; the face datasets follow the same rule.
 
 Beyond presence, the invariants are about axes rather than ranks: the two grids differ only
-in their trailing radial axis, ``rho_face`` holds one more point than ``rho``, and ``ts``
-holds one timestamp per slice. Malformed cases run on the inner checker; the valid, missing-Er
-and missing-face files exercise the h5 read plus the raise.
+in their trailing radial axis, ``rho_face`` holds one more point than ``rho`` and increases
+strictly outward with ``rho`` at its midpoints, and ``ts`` holds one timestamp per slice.
+Malformed cases run on the inner checker; the valid, missing-Er and missing-face files
+exercise the h5 read plus the raise.
 """
 
 from __future__ import annotations
@@ -26,18 +27,25 @@ from src.io_contracts import ContractError, _check_transport_solution, validate_
 from tests.helpers.synthetic import write_transport_solution
 
 
+def _staggered_grid(n_rho: int) -> tuple[np.ndarray, np.ndarray]:
+    """NEOPAX's staggered grid: ``(centers, faces)`` for n_rho cells, centers midway between faces."""
+    rho_face = np.linspace(0.0, 1.0, n_rho + 1)
+    return 0.5 * (rho_face[:-1] + rho_face[1:]), rho_face
+
+
 def _valid_data(n_species: int = 3, n_rho: int = 5) -> dict[str, np.ndarray | None]:
     """A minimal valid solution on both of NEOPAX's grids: n_rho cell centers and n_rho + 1 faces."""
     profile = np.ones((n_species, n_rho))
     face_profile = np.ones((n_species, n_rho + 1))
+    rho, rho_face = _staggered_grid(n_rho)
     return {
-        "rho": np.linspace(0.0, 1.0, n_rho),
+        "rho": rho,
         "density": profile.copy(),
         "temperature": profile.copy(),
         "pressure": None,
         "Er": np.ones(n_rho),
         "ts": None,
-        "rho_face": np.linspace(0.0, 1.0, n_rho + 1),
+        "rho_face": rho_face,
         "density_faces": face_profile.copy(),
         "temperature_faces": face_profile.copy(),
         "pressure_faces": None,
@@ -122,12 +130,12 @@ def test_ts_length_mismatch_flagged() -> None:
 
 
 def test_valid_file_passes(tmp_path: Path) -> None:
-    rho = np.linspace(0.0, 1.0, 5)
+    rho, rho_face = _staggered_grid(5)
     profile = np.ones((3, 5))
     face_profile = np.ones((3, 6))
     written = write_transport_solution(
         tmp_path / "t.h5", rho=rho, density=profile, temperature=profile, er=np.ones(5),
-        rho_face=np.linspace(0.0, 1.0, 6), density_face=face_profile,
+        rho_face=rho_face, density_face=face_profile,
         temperature_face=face_profile, er_face=np.ones(6),
     )
     assert validate_transport_solution(written) is None
@@ -136,7 +144,7 @@ def test_valid_file_passes(tmp_path: Path) -> None:
 # End-to-end failure path: writes a real file omitting the `er` argument (so `Er` is absent) and asserts
 # `validate_transport_solution` raises a ContractError mentioning `Er`.
 def test_file_missing_er_raises(tmp_path: Path) -> None:
-    rho = np.linspace(0.0, 1.0, 5)
+    rho, _ = _staggered_grid(5)
     profile = np.ones((3, 5))
     written = write_transport_solution(tmp_path / "t.h5", rho=rho, density=profile, temperature=profile)
     with pytest.raises(ContractError, match="Er"):
@@ -161,7 +169,32 @@ def test_missing_face_field_flagged(field: str) -> None:
 def test_face_grid_must_have_one_more_point_than_the_centers() -> None:
     data = _valid_data(n_rho=5)
     data["rho_face"] = np.linspace(0.0, 1.0, 5)  # as many faces as cells
-    assert any("rho_face" in problem and "one more" in problem for problem in _check_transport_solution(data))
+    problems = _check_transport_solution(data)
+    # The elementwise geometry checks would raise on these mismatched shapes, so they stay gated behind this
+    # length check.
+    assert any("rho_face" in problem and "one more" in problem for problem in problems)
+
+
+# The centers are not an independent grid but the midpoints of the faces, which is how NEOPAX builds them. A
+# file whose `rho` is the face linspace itself, or is written outside-in, keeps the right point count and
+# passes every axis check, so counting alone cannot catch it.
+@pytest.mark.parametrize(
+    "rho",
+    [np.linspace(0.0, 1.0, 5), np.array([0.9, 0.7, 0.5, 0.3, 0.1])],
+    ids=["node_grid", "descending"],
+)
+def test_centres_that_are_not_the_face_midpoints_flagged(rho: np.ndarray) -> None:
+    data = _valid_data(n_rho=5)
+    data["rho"] = rho
+    assert any("midpoints" in problem for problem in _check_transport_solution(data))
+
+
+# The faces march outward from the axis. A shuffled face grid still has the right length, and its midpoints can
+# even stay inside [0, 1], so nothing but monotonicity distinguishes it from a grid whose cells have positive width.
+def test_non_monotonic_face_grid_flagged() -> None:
+    data = _valid_data(n_rho=5)
+    data["rho_face"] = np.array([0.0, 0.6, 0.2, 0.8, 0.4, 1.0])
+    assert any("rho_face" in problem and "strictly" in problem for problem in _check_transport_solution(data))
 
 
 # Each face profile spans the face grid, not the cell grid. Sizing one like the centers would leave the outermost
@@ -196,8 +229,9 @@ def test_face_and_centre_rank_mismatch_flagged() -> None:
 # centers, but not a loop iteration -- and the contract holds the artifact to the latter.
 def test_file_without_the_face_datasets_raises(tmp_path: Path) -> None:
     profile = np.ones((3, 5))
+    rho, _ = _staggered_grid(5)
     written = write_transport_solution(
-        tmp_path / "old_pin.h5", rho=np.linspace(0.0, 1.0, 5),
+        tmp_path / "old_pin.h5", rho=rho,
         density=profile, temperature=profile, er=np.ones(5),
     )
     with pytest.raises(ContractError, match="density_faces"):
