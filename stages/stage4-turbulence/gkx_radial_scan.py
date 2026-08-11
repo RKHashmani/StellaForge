@@ -1005,8 +1005,8 @@ def _build_manifest(
         "booz_file": booz_path,
         "vmec_file": vmec_path,
         "grid": {
-            "Nx": int(_coalesce(args.nx, template_grid.get("Nx"), 96)),
-            "Ny": int(_coalesce(args.ny, template_grid.get("Ny"), 96)),
+            "Nx": int(_coalesce(args.nx, template_grid.get("Nx"), 48)),
+            "Ny": int(_coalesce(args.ny, template_grid.get("Ny"), 48)),
             "Nz": int(_coalesce(args.nz, template_grid.get("Nz"), 48)),
             "Lx": float(_coalesce(args.lx, template_grid.get("Lx"), 62.8)),
             "Ly": float(_coalesce(args.ly, template_grid.get("Ly"), 62.8)),
@@ -1016,12 +1016,12 @@ def _build_manifest(
             "nperiod": int(_coalesce(args.nperiod, template_grid.get("nperiod"), 1)),
         },
         "time": {
-            "t_max": float(_coalesce(args.t_max, template_time.get("t_max"), 200.0)),
+            "t_max": float(_coalesce(args.t_max, template_time.get("t_max"), 100.0)),
             "dt": float(_coalesce(args.dt, template_time.get("dt"), 0.1)),
             "method": str(_coalesce(args.method, template_time.get("method"), "rk3")),
             "use_diffrax": bool(_coalesce(args.use_diffrax, template_time.get("use_diffrax"), False)),
-            "sample_stride": int(_coalesce(args.sample_stride, template_time.get("sample_stride"), 50)),
-            "diagnostics_stride": int(_coalesce(args.diagnostics_stride, template_time.get("diagnostics_stride"), 50)),
+            "sample_stride": int(_coalesce(args.sample_stride, template_time.get("sample_stride"), 1)),
+            "diagnostics_stride": int(_coalesce(args.diagnostics_stride, template_time.get("diagnostics_stride"), 1)),
             "chunk_steps": None
             if _coalesce(args.chunk_steps, template_time.get("chunk_steps"), None) is None
             else int(_coalesce(args.chunk_steps, template_time.get("chunk_steps"), None)),
@@ -2304,23 +2304,23 @@ def _add_prepare_shaping_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--tau-e-override", type=float, default=None)
     parser.add_argument("--nu-ion", type=float, default=0.01)
     parser.add_argument("--nu-electron", type=float, default=0.0)
-    parser.add_argument("--nx", type=int, default=12, help="Nonlinear spectral resolution in kx / x")
-    parser.add_argument("--ny", type=int, default=12, help="Nonlinear spectral resolution in ky / y")
+    parser.add_argument("--nx", type=int, default=None, help="Nonlinear spectral resolution in kx / x")
+    parser.add_argument("--ny", type=int, default=None, help="Nonlinear spectral resolution in ky / y")
     parser.add_argument("--nz", type=int, default=None, help="Parallel/grid resolution in z")
     parser.add_argument("--lx", type=float, default=None)
     parser.add_argument("--ly", type=float, default=None)
     parser.add_argument("--boundary", default=None)
     parser.add_argument("--y0", type=float, default=None)
-    parser.add_argument("--ntheta", type=int, default=30, help="Number of theta points for generated VMEC geometry")
+    parser.add_argument("--ntheta", type=int, default=None, help="Number of theta points for generated VMEC geometry")
     parser.add_argument("--nperiod", type=int, default=None)
-    parser.add_argument("--t-max", type=float, default=10.0)
+    parser.add_argument("--t-max", type=float, default=None)
     parser.add_argument("--t-final", dest="t_max", type=float, help="Alias for --t-max")
     parser.add_argument("--dt", type=float, default=None)
     parser.add_argument("--method", default=None)
     parser.add_argument("--use-diffrax", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--fixed-dt", action=argparse.BooleanOptionalAction, default=None)
-    parser.add_argument("--sample-stride", type=int, default=50)
-    parser.add_argument("--diagnostics-stride", type=int, default=1)
+    parser.add_argument("--sample-stride", type=int, default=None)
+    parser.add_argument("--diagnostics-stride", type=int, default=None)
     parser.add_argument(
         "--resolved-diagnostics",
         action=argparse.BooleanOptionalAction,
