@@ -26,15 +26,26 @@ def write_transport_solution(
     temperature: np.ndarray | None = None,
     density: np.ndarray | None = None,
     er: np.ndarray | None = None,
+    rho_face: np.ndarray | None = None,
+    pressure_face: np.ndarray | None = None,
+    temperature_face: np.ndarray | None = None,
+    density_face: np.ndarray | None = None,
+    er_face: np.ndarray | None = None,
 ) -> Path:
     """Write a synthetic ``transport_solution.h5`` from caller-supplied profiles.
+
+    NEOPAX solves on a staggered finite-volume grid: the evolved state sits on ``n_rho``
+    cell centers (``rho``) while the face quantities sit on the ``n_rho + 1`` faces
+    (``rho_face``) that bound those cells. The face datasets are written under NEOPAX's own
+    plural names (``density_faces`` and friends) against the singular ``rho_face``, matching
+    the spelling split in its ``write_transport_hdf5``.
 
     Parameters
     ----------
     path : Path
         Destination HDF5 file.
     rho : np.ndarray
-        Radial coordinate, shape ``(n_rho,)``.
+        Cell-center radial coordinate, shape ``(n_rho,)``.
     pressure, temperature, density : np.ndarray, optional
         Species-resolved profiles shaped ``(n_species, n_rho)`` for a static profile
         or ``(n_time, n_species, n_rho)`` for a time-resolved one. Provide either
@@ -43,6 +54,12 @@ def write_transport_solution(
     er : np.ndarray, optional
         Radial electric field ``Er``, shape ``(n_rho,)`` static or ``(n_time, n_rho)``
         time-resolved. Carries no species axis. Required by the Stage 3/4 readers.
+    rho_face : np.ndarray, optional
+        Face radial coordinate, shape ``(n_rho + 1,)``.
+    pressure_face, temperature_face, density_face, er_face : np.ndarray, optional
+        Face-grid counterparts of the profiles above, carrying ``n_rho + 1`` radial
+        entries. Written as ``pressure_faces``, ``temperature_faces``, ``density_faces``
+        and ``Er_faces``.
 
     Returns
     -------
@@ -51,7 +68,18 @@ def write_transport_solution(
     """
     with h5py.File(path, "w") as f:
         f.create_dataset("rho", data=np.asarray(rho, dtype=float))
-        for name, arr in (("pressure", pressure), ("temperature", temperature), ("density", density), ("Er", er)):
+        if rho_face is not None:
+            f.create_dataset("rho_face", data=np.asarray(rho_face, dtype=float))
+        for name, arr in (
+            ("pressure", pressure),
+            ("temperature", temperature),
+            ("density", density),
+            ("Er", er),
+            ("pressure_faces", pressure_face),
+            ("temperature_faces", temperature_face),
+            ("density_faces", density_face),
+            ("Er_faces", er_face),
+        ):
             if arr is not None:
                 f.create_dataset(name, data=np.asarray(arr, dtype=float))
     return path

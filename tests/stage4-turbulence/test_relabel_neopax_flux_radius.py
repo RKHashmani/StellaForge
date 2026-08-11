@@ -140,7 +140,7 @@ def test_neopax_radial_grid_rejects_grid_that_stops_short_of_edge():
         relabel.neopax_radial_grid(np.linspace(0.0, 0.9, N_R), W7X_A_B)
 
 
-# NEOPAX grids linspace(0, rho_edge, n_radial), so a run with [geometry].rho_edge < 1 -- the
+# NEOPAX faces its cells at linspace(0, rho_edge, n_radial + 1), so a run with [geometry].rho_edge < 1 -- the
 # Trinity3D W7-X benchmark uses 0.7 -- writes Stage 4 fluxes out to rho_edge, not 1. The outer
 # check has to follow rho_edge or it would reject exactly the grid it is meant to accept.
 def test_neopax_radial_grid_accepts_a_grid_that_reaches_a_non_unit_rho_edge():

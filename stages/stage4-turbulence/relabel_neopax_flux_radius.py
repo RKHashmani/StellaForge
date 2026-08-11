@@ -131,7 +131,7 @@ def neopax_radial_grid(rho: np.ndarray, a_minor: float, *, rho_edge: float = 1.0
         Minor radius to relabel onto, in m, from :func:`read_neopax_minor_radius`.
     rho_edge : float, optional
         NEOPAX's ``[geometry].rho_edge``, i.e. the outer end of the grid it builds as
-        ``linspace(0, rho_edge, n_radial)``. Default ``1.0``, NEOPAX's own default.
+        ``linspace(0, rho_edge, n_radial + 1)``. Default ``1.0``, NEOPAX's own default.
 
     Returns
     -------
@@ -147,22 +147,24 @@ def neopax_radial_grid(rho: np.ndarray, a_minor: float, *, rho_edge: float = 1.0
 
     Notes
     -----
-    Both ends are checked because NEOPAX grids ``linspace(0, rho_edge, n_radial)``, so its first
-    target sits at 0 and its last at ``rho_edge``. A Stage 4 scan that subsamples radii through
-    ``rho_min``, ``num_radii`` or ``rho_indices`` writes a flux file whose grid starts above 0,
-    since the axis re-insertion in ``collect`` only fires for a scan covering every surface but the
-    axis.
+    NEOPAX solves on a staggered finite-volume grid: ``n_radial`` cells whose ``n_radial + 1``
+    bounding faces are ``linspace(0, rho_edge, n_radial + 1)``. Fluxes live on the faces, so that is
+    the grid a flux file is interpolated onto, and its ends are 0 and ``rho_edge``. Both ends are
+    therefore checked. A Stage 4 scan that subsamples radii through ``rho_min``, ``num_radii`` or
+    ``rho_indices`` writes a flux file whose grid starts above 0, since the axis re-insertion in
+    ``collect`` only fires for a scan covering every face but the axis.
 
     The two coverage comparisons are exact and one-sided, not tolerant. interpax admits no tolerance
     of its own, so a knot even one ulp inside a target leaves that target outside the grid. Covering
     *more* than ``[0, rho_edge]`` is accepted, since extra knots outside the transport domain are
     harmless to an interpolation.
 
-    Interior spacing is deliberately unconstrained for the same reason. A sparse grid covering the
-    interval is a legitimate input for NEOPAX to interpolate from, and rejecting it would break the
-    subsampling options above. ``[turbulence] lagged_response_mode = "fd"`` is stricter and needs
-    the two grids equal point for point, which NEOPAX itself enforces to ``1e-12`` at model
-    construction rather than this script guessing at ``n_radial``.
+    Interior spacing is deliberately unconstrained for the same reason: a sparse or oversampled grid
+    covering the interval is a legitimate input for NEOPAX to interpolate from, and rejecting it
+    would break both the subsampling options above and an explicit ``--analytical-n-radii``.
+    ``[turbulence] lagged_response_mode = "fd"`` is stricter and needs the two grids equal point for
+    point, which NEOPAX itself enforces to ``1e-12`` at model construction against its own
+    ``r_grid_half`` rather than this script guessing at ``n_radial``.
     """
     rho = np.asarray(rho, dtype=np.float64)
     if rho.ndim != 1 or rho.size < 2:
