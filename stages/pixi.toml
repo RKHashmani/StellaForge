@@ -60,13 +60,13 @@ matplotlib-base = ">=3.10.8,<4"
 netcdf4 = ">=1.7.4,<2"
 diffrax = ">=0.7.2,<0.8"
 equinox = ">=0.13.6,<0.14"
-solvax = ">=0.7.3,<0.8"
+solvax = ">=0.13.0,<0.14"
 tqdm = ">=4.68.4,<5"
 booz-xform-jax = ">=0.1.0,<0.2"
 h5py = ">=3.16.0,<4"
 
 [feature.gkx.pypi-dependencies]
-gkx = { git = "https://github.com/uwplasma/GKX.git", rev = "a09801031bbaeb8801a5521986964c35ed6666e2" }
+gkx = { git = "https://github.com/uwplasma/GKX.git", rev = "f370707b33bde064de43f33821845dcabbdb46e3" }
 
 [feature.gkx.tasks.stage-4-gkx]
 cmd = "gkx run --config ../inputs/quick_run/HSX_vacuum_ns201_quickrun.toml --out ../outputs/quick_run/stage4_turbulence/hsx_run_quickrun"
