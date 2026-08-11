@@ -69,11 +69,12 @@ def _validate_neopax_profiles(cfg: dict[str, Any], template: str) -> None:
 def read_rho_edge(s5_config_template: str) -> float:
     """Return ``[geometry].rho_edge`` from the NEOPAX template, or NEOPAX's default of 1.0.
 
-    Every stage builds its radial grid as ``linspace(0, rho_edge, n_radial)``, NEOPAX in
-    ``_geometry_models.py`` and the Stage 3 and Stage 4 scans in this repo, so the value has to
-    reach the Stage 4 flux-file relabelling step too, which otherwise assumes the grid runs out to
-    ``rho = 1``. Read here rather than duplicated into ``config.yaml`` so the NEOPAX template stays
-    the single source of truth for the transport grid.
+    NEOPAX solves on a staggered grid whose ``n_radial + 1`` faces are
+    ``linspace(0, rho_edge, n_radial + 1)``, and the Stage 3 and Stage 4 scans sample those faces,
+    so ``rho_edge`` bounds every radial grid in the pipeline. It therefore has to reach the Stage 4
+    flux-file relabelling step too, which otherwise assumes the grid runs out to ``rho = 1``. Read
+    here rather than duplicated into ``config.yaml`` so the NEOPAX template stays the single source
+    of truth for the transport grid.
 
     Parameters
     ----------

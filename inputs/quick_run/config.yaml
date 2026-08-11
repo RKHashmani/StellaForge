@@ -94,8 +94,10 @@ stage4:
     neopax_result: null
 
     # --- Surface selection ---
-    # Number of rho grid points for profiles_source: analytical; null falls back to
-    # [geometry].n_radial in common_input.toml (5 points, scanning 4 nonzero surfaces).
+    # Number of rho grid points for profiles_source: analytical; null falls back to the transport
+    # face grid, [geometry].n_radial + 1 in common_input.toml. NEOPAX solves on n_radial cells and
+    # interpolates flux files onto the n_radial + 1 faces that bound them, so that is where this
+    # scan samples. For n_radial = 5 that is 6 faces, scanning the 5 nonzero ones.
     analytical_n_radii: null
     # num_radii: 4            # subsample this many radii inside the rho window
     # rho_min: 0.0            # lower edge of the rho window

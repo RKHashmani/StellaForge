@@ -81,7 +81,7 @@ SNAPSHOT_MODULES = [
 # Stage 3's and Stage 4's copy of the function.
 @pytest.mark.parametrize("module", SNAPSHOT_MODULES)
 def test_snapshot_shapes(module: ModuleType) -> None:
-    snap = module._build_standard_analytical_snapshot({}, n_species=3, n_radial=5)
+    snap = module._build_standard_analytical_snapshot({}, n_species=3, n_points=5)
     assert snap.rho.shape == (5,)
     assert snap.density.shape == (3, 5)
     assert snap.temperature.shape == (3, 5)
@@ -91,7 +91,7 @@ def test_snapshot_shapes(module: ModuleType) -> None:
 
 @pytest.mark.parametrize("module", SNAPSHOT_MODULES)
 def test_snapshot_core_and_edge_values(module: ModuleType) -> None:
-    snap = module._build_standard_analytical_snapshot({}, n_species=3, n_radial=5)
+    snap = module._build_standard_analytical_snapshot({}, n_species=3, n_points=5)
     # defaults: n0 = 4.21, n_edge = 0.6, T0 = 17.8, T_edge = 0.7; electron scale = 1.0
     assert_allclose(snap.density[0, 0], 4.21, rtol=1e-12)
     assert_allclose(snap.density[0, -1], 0.6, rtol=1e-12)
@@ -105,7 +105,7 @@ def test_snapshot_core_and_edge_values(module: ModuleType) -> None:
 @pytest.mark.parametrize("module", SNAPSHOT_MODULES)
 def test_snapshot_species_density_ratios(module: ModuleType) -> None:
     cfg = {"profiles": {"deuterium_ratio": 0.6, "tritium_ratio": 0.4}}
-    snap = module._build_standard_analytical_snapshot(cfg, n_species=3, n_radial=5)
+    snap = module._build_standard_analytical_snapshot(cfg, n_species=3, n_points=5)
     assert_allclose(snap.density[1], 0.6 * snap.density[0], rtol=1e-12)
     assert_allclose(snap.density[2], 0.4 * snap.density[0], rtol=1e-12)
 
@@ -134,7 +134,7 @@ def _w7x_like_profiles() -> dict:
 # electron and ion columns start at 6.7 and 1.0 respectively and both end at 0.8.
 @pytest.mark.parametrize("module", SNAPSHOT_MODULES)
 def test_snapshot_accepts_per_species_arrays(module: ModuleType) -> None:
-    snap = module._build_standard_analytical_snapshot(_w7x_like_profiles(), n_species=2, n_radial=5)
+    snap = module._build_standard_analytical_snapshot(_w7x_like_profiles(), n_species=2, n_points=5)
     assert_allclose(snap.temperature[0, 0], 6.7, rtol=1e-12)  # electron core T0
     assert_allclose(snap.temperature[1, 0], 1.0, rtol=1e-12)  # ion core T0
     assert_allclose(snap.temperature[:, -1], 0.8, rtol=1e-12)  # shared T_edge
@@ -147,7 +147,7 @@ def test_snapshot_accepts_per_species_arrays(module: ModuleType) -> None:
 # normalised shapes come out different.
 @pytest.mark.parametrize("module", SNAPSHOT_MODULES)
 def test_snapshot_applies_shape_alpha(module: ModuleType) -> None:
-    snap = module._build_standard_analytical_snapshot(_w7x_like_profiles(), n_species=2, n_radial=5)
+    snap = module._build_standard_analytical_snapshot(_w7x_like_profiles(), n_species=2, n_points=5)
     x = np.linspace(0.0, 1.0, 5)
     for i, (t0, alpha) in enumerate([(6.7, 2.0), (1.0, 1.0)]):
         expected = 0.8 + (t0 - 0.8) * (1.0 - x**2.0) ** alpha
@@ -162,7 +162,7 @@ def test_snapshot_applies_shape_alpha(module: ModuleType) -> None:
 # linspace(0, 0.7, n) rather than always reaching 1.0; the shape functions are evaluated on x = rho / rho_edge.
 @pytest.mark.parametrize("module", SNAPSHOT_MODULES)
 def test_snapshot_grid_honours_rho_edge(module: ModuleType) -> None:
-    snap = module._build_standard_analytical_snapshot(_w7x_like_profiles(), n_species=2, n_radial=5)
+    snap = module._build_standard_analytical_snapshot(_w7x_like_profiles(), n_species=2, n_points=5)
     assert_allclose(snap.rho, np.linspace(0.0, 0.7, 5), rtol=1e-12)
 
 
@@ -170,7 +170,7 @@ def test_snapshot_grid_honours_rho_edge(module: ModuleType) -> None:
 def test_snapshot_grid_defaults_rho_edge(module: ModuleType) -> None:
     cfg = _w7x_like_profiles()
     del cfg["geometry"]["rho_edge"]
-    snap = module._build_standard_analytical_snapshot(cfg, n_species=2, n_radial=5)
+    snap = module._build_standard_analytical_snapshot(cfg, n_species=2, n_points=5)
     assert_allclose(snap.rho, np.linspace(0.0, 1.0, 5), rtol=1e-12)
 
 
@@ -181,7 +181,7 @@ def test_snapshot_grid_defaults_rho_edge(module: ModuleType) -> None:
 def test_snapshot_er_is_neopax_parabola(module: ModuleType) -> None:
     cfg = _w7x_like_profiles()
     cfg["profiles"]["er0_scale"] = 100.0
-    snap = module._build_standard_analytical_snapshot(cfg, n_species=2, n_radial=5)
+    snap = module._build_standard_analytical_snapshot(cfg, n_species=2, n_points=5)
     x = np.linspace(0.0, 1.0, 5)
     assert_allclose(snap.er, 100.0 * x * (0.8 - x), rtol=1e-12)
     assert snap.er[-1] < 0.0  # x = 1 > er0_peak_rho = 0.8
@@ -191,7 +191,7 @@ def test_snapshot_er_is_neopax_parabola(module: ModuleType) -> None:
 # to exactly zero at every radius. atol = 0.0 pins exact zeros rather than merely small values.
 @pytest.mark.parametrize("module", SNAPSHOT_MODULES)
 def test_snapshot_er_is_zero_when_scale_is_zero(module: ModuleType) -> None:
-    snap = module._build_standard_analytical_snapshot(_w7x_like_profiles(), n_species=2, n_radial=5)
+    snap = module._build_standard_analytical_snapshot(_w7x_like_profiles(), n_species=2, n_points=5)
     assert_allclose(snap.er, np.zeros(5), atol=0.0)
 
 
@@ -201,9 +201,16 @@ def test_snapshot_er_is_zero_when_scale_is_zero(module: ModuleType) -> None:
 # arrays, so it gets the same dual-module drift guard. The prescribed block stores SI values (density in m^-3,
 # temperature in eV, Er in kV/m) while the snapshot uses 1e20 m^-3 and keV, and the block carries no radial
 # coordinate, so the builder must divide the units back and reconstruct the transport grid from [geometry].
+#
+# The block carries both of NEOPAX's radial grids. The plain arrays hold n_radial cell-center values, which is what
+# NEOPAX itself reads back; the `*_face` arrays hold n_radial + 1 values on the faces, which is where these scans
+# sample fluxes because that is the grid NEOPAX interpolates a flux file onto. The snapshot is built from the face
+# arrays, so the fixtures give the two grids disjoint magnitudes and a reader taking the wrong one cannot pass.
 def _prescribed_cfg(n_species: int = 3, n_radial: int = 5) -> dict:
     density = [[(s + 1) * (r + 1) * 1.0e19 for r in range(n_radial)] for s in range(n_species)]
     temperature = [[(s + 1) * (r + 1) * 1.0e3 for r in range(n_radial)] for s in range(n_species)]
+    density_face = [[(s + 1) * (r + 1) * 2.0e19 for r in range(n_radial + 1)] for s in range(n_species)]
+    temperature_face = [[(s + 1) * (r + 1) * 2.0e3 for r in range(n_radial + 1)] for s in range(n_species)]
     return {
         "geometry": {"n_radial": n_radial, "rho_edge": 0.7},
         "profiles": {
@@ -211,28 +218,61 @@ def _prescribed_cfg(n_species: int = 3, n_radial: int = 5) -> dict:
             "density": density,
             "temperature": temperature,
             "Er": [float(r) for r in range(n_radial)],
+            "density_face": density_face,
+            "temperature_face": temperature_face,
+            "Er_face": [10.0 + r for r in range(n_radial + 1)],
         },
     }
 
 
+# The snapshot must come off the face grid: n_radial + 1 points spanning [0, rho_edge], carrying the `*_face` values
+# converted out of SI. Taking the centered arrays instead would place n_radial values at the wrong radii, and nothing
+# downstream would report it.
 @pytest.mark.parametrize("module", SNAPSHOT_MODULES)
 def test_prescribed_snapshot_units_and_grid(module: ModuleType) -> None:
     snap = module._build_prescribed_snapshot(_prescribed_cfg(), n_species=3)
-    expected = np.array([[(s + 1) * (r + 1) for r in range(5)] for s in range(3)], dtype=float)
-    assert_allclose(snap.density, expected * 0.1, rtol=1e-12)  # 1e19 m^-3 becomes 0.1 in 1e20 m^-3 units
-    assert_allclose(snap.temperature, expected, rtol=1e-12)  # 1e3 eV becomes 1 keV
-    assert_allclose(snap.er, np.arange(5.0), rtol=1e-12)  # kV/m passes through unchanged
-    assert_allclose(snap.rho, np.linspace(0.0, 0.7, 5), rtol=1e-12)
+    expected = np.array([[(s + 1) * (r + 1) for r in range(6)] for s in range(3)], dtype=float)
+    assert_allclose(snap.density, expected * 0.2, rtol=1e-12)  # 2e19 m^-3 becomes 0.2 in 1e20 m^-3 units
+    assert_allclose(snap.temperature, expected * 2.0, rtol=1e-12)  # 2e3 eV becomes 2 keV
+    assert_allclose(snap.er, 10.0 + np.arange(6.0), rtol=1e-12)  # kV/m passes through unchanged
+    assert_allclose(snap.rho, np.linspace(0.0, 0.7, 6), rtol=1e-12)
     assert snap.time_value is None
 
 
-# A template without [geometry].rho_edge reconstructs the default full-radius grid.
+# A template without [geometry].rho_edge reconstructs the default full-radius face grid.
 @pytest.mark.parametrize("module", SNAPSHOT_MODULES)
 def test_prescribed_snapshot_defaults_rho_edge(module: ModuleType) -> None:
     cfg = _prescribed_cfg()
     del cfg["geometry"]["rho_edge"]
     snap = module._build_prescribed_snapshot(cfg, n_species=3)
-    assert_allclose(snap.rho, np.linspace(0.0, 1.0, 5), rtol=1e-12)
+    assert_allclose(snap.rho, np.linspace(0.0, 1.0, 6), rtol=1e-12)
+
+
+# A hand-written block, or one from a NEOPAX predating the staggered grid, carries only the centered arrays. There is
+# no safe way to invent the face values here: NEOPAX builds them under the run's own boundary models, so an
+# extrapolation guessed at this end would disagree with the solver wherever the outer boundary is not a plain
+# Dirichlet. The builder therefore refuses and names both the missing key and where it comes from.
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+@pytest.mark.parametrize("key", ["density_face", "temperature_face", "Er_face"])
+def test_prescribed_snapshot_requires_the_face_arrays(module: ModuleType, key: str) -> None:
+    cfg = _prescribed_cfg()
+    del cfg["profiles"][key]
+    with pytest.raises(ValueError, match=rf"\[profiles\]\.{key}"):
+        module._build_prescribed_snapshot(cfg, n_species=3)
+
+
+# The face arrays carry exactly one more radius than the centered ones. A face array sized like the centers would
+# leave the outermost face unsampled and shift every other value inward by half a cell.
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+def test_prescribed_snapshot_face_width_validation(module: ModuleType) -> None:
+    cfg = _prescribed_cfg()
+    cfg["profiles"]["density_face"] = [row[:-1] for row in cfg["profiles"]["density_face"]]
+    with pytest.raises(ValueError, match=r"\[profiles\]\.density_face"):
+        module._build_prescribed_snapshot(cfg, n_species=3)
+    cfg = _prescribed_cfg()
+    cfg["profiles"]["Er_face"] = cfg["profiles"]["Er_face"][:-1]
+    with pytest.raises(ValueError, match=r"\[profiles\]\.Er_face"):
+        module._build_prescribed_snapshot(cfg, n_species=3)
 
 
 # Only "prescribed" activates the builder. NEOPAX's "given" synonym is deliberately rejected too:
@@ -268,8 +308,17 @@ def test_prescribed_snapshot_shape_validation(module: ModuleType) -> None:
     cfg["geometry"]["n_radial"] = 7
     with pytest.raises(ValueError, match=r"\[geometry\]\.n_radial"):
         module._build_prescribed_snapshot(cfg, n_species=3)
-    with pytest.raises(ValueError, match="at least 3"):
-        module._build_prescribed_snapshot(_prescribed_cfg(n_radial=2), n_species=3)
+    with pytest.raises(ValueError, match="at least 3 faces"):
+        module._build_prescribed_snapshot(_prescribed_cfg(n_radial=1), n_species=3)
+
+
+# The floor is on faces, not cells, because that is where the gradients are taken. Two cells give three faces, which
+# is enough for np.gradient's edge_order=2, and also clears NEOPAX's own two-cell minimum for extrapolating its outer
+# boundary value. One cell gives two faces and is rejected above.
+@pytest.mark.parametrize("module", SNAPSHOT_MODULES)
+def test_prescribed_snapshot_accepts_two_cells(module: ModuleType) -> None:
+    snap = module._build_prescribed_snapshot(_prescribed_cfg(n_radial=2), n_species=3)
+    assert_allclose(snap.rho, np.linspace(0.0, 0.7, 3), rtol=1e-12)
 
 
 # --- prepare dispatch ---
@@ -292,13 +341,18 @@ model = "prescribed"
 density = [[1.0e19, 1.1e19, 1.2e19, 1.3e19, 1.4e19], [5.0e18, 5.5e18, 6.0e18, 6.5e18, 7.0e18], [5.0e18, 5.5e18, 6.0e18, 6.5e18, 7.0e18]]
 temperature = [[1000.0, 900.0, 800.0, 700.0, 600.0], [950.0, 850.0, 750.0, 650.0, 550.0], [940.0, 840.0, 740.0, 640.0, 540.0]]
 Er = [0.0, 1.0, 2.0, 3.0, 4.0]
+density_face = [[0.95e19, 1.05e19, 1.15e19, 1.25e19, 1.35e19, 1.45e19], [4.75e18, 5.25e18, 5.75e18, 6.25e18, 6.75e18, 7.25e18], [4.75e18, 5.25e18, 5.75e18, 6.25e18, 6.75e18, 7.25e18]]
+temperature_face = [[1050.0, 950.0, 850.0, 750.0, 650.0, 550.0], [1000.0, 900.0, 800.0, 700.0, 600.0, 500.0], [990.0, 890.0, 790.0, 690.0, 590.0, 490.0]]
+Er_face = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
 """
 
 
 # The snapshot tests above call _build_prescribed_snapshot directly, so the dispatch branch in _prepare that routes
 # --profiles-source=prescribed to it (with no transport solution) would go untested without this. Running the real
 # _prepare against a prescribed template and the tracked sfincs template must succeed without any transport file,
-# record the source in the manifest, and scan exactly the prescribed 5-point grid minus the magnetic axis.
+# record the source in the manifest, and scan exactly the transport face grid minus the magnetic axis.
+# [geometry].n_radial = 5 cells means 6 faces at linspace(0, 1, 6), of which the axis face is dropped, so 5 surfaces
+# are scanned.
 def test_prepare_dispatches_prescribed_source(tmp_path: Path) -> None:
     config = tmp_path / "common_input.toml"
     config.write_text(PRESCRIBED_TOML)
@@ -312,5 +366,97 @@ def test_prepare_dispatches_prescribed_source(tmp_path: Path) -> None:
     manifest, pending = scan._prepare(args)
     assert manifest["profiles_source"] == "prescribed"
     assert manifest["source_transport_solution"] is None
-    assert [run["rho"] for run in manifest["runs"]] == [0.25, 0.5, 0.75, 1.0]
-    assert len(pending) == 4
+    assert [run["rho"] for run in manifest["runs"]] == pytest.approx([0.2, 0.4, 0.6, 0.8, 1.0])
+    assert len(pending) == 5
+
+
+# --- transport_h5: reading a NEOPAX transport solution directly ---
+
+# The third profile source reads transport_solution.h5 itself rather than the [profiles] block the loop writes. It
+# needs the same face grid as the prescribed path and for the same reason: NEOPAX's evolved state sits on the cell
+# centers, which span neither rho = 0 nor rho = rho_edge, so a snapshot built from them gives a flux file that stops
+# short at both ends and NEOPAX rejects it (or, where a relabel step runs first, that step does).
+TRANSPORT_READERS = [
+    pytest.param(scan, "_load_transport_snapshot", id="sfincs_jax"),
+    pytest.param(gkx_scan, "_infer_transport_snapshot", id="gkx"),
+]
+
+
+def _write_transport_h5(
+    path: Path, *, n_radial: int = 5, n_species: int = 3, faces: bool = True, time_resolved: bool = True
+) -> Path:
+    """Write a transport solution laid out the way the pinned NEOPAX writes one.
+
+    NEOPAX emits either a time series shaped ``(n_time, n_species, n_rho)`` or a single static slice
+    shaped ``(n_species, n_rho)``, and both readers have to tell those ranks apart: a static file's
+    leading axis is species, so indexing it as time silently returns one species row. ``offset``
+    separates the two time slices so the last one is distinguishable.
+    """
+    from tests.helpers.synthetic import write_transport_solution
+
+    offset = 100.0 if time_resolved else 0.0
+    ramp_c = np.arange(n_species * n_radial, dtype=float).reshape(n_species, n_radial)
+    ramp_f = np.arange(n_species * (n_radial + 1), dtype=float).reshape(n_species, n_radial + 1)
+    face_grid = np.linspace(0.0, 1.0, n_radial + 1)
+
+    def lay(a: np.ndarray) -> np.ndarray:
+        """Return ``a`` as a static slice, or as two time slices whose last one is ``a + offset``."""
+        return np.stack([a, a + offset]) if time_resolved else a
+
+    extra = {}
+    if faces:
+        extra = dict(
+            rho_face=face_grid,
+            density_face=lay(5.0 + 0.1 * ramp_f),
+            temperature_face=lay(7.0 + 0.2 * ramp_f),
+            er_face=lay(np.linspace(-2.0, 4.0, n_radial + 1)),
+        )
+    return write_transport_solution(
+        path,
+        rho=0.5 * (face_grid[:-1] + face_grid[1:]),
+        density=lay(1.0 + 0.1 * ramp_c),
+        temperature=lay(2.0 + 0.2 * ramp_c),
+        er=lay(np.linspace(-1.0, 3.0, n_radial)),
+        **extra,
+    )
+
+
+# The snapshot must land on the face grid with the face values, exactly as the prescribed path does. The face fixtures
+# use disjoint magnitudes from the centered ones, so a reader still taking f["density"] cannot pass.
+# `time_resolved` also puts the rank split on trial. A static file's leading axis is species, not time, so a reader
+# indexing it as time returns one species row and a scalar Er while every shape check downstream still looks plausible.
+@pytest.mark.parametrize(("module", "reader"), TRANSPORT_READERS)
+@pytest.mark.parametrize("time_resolved", [True, False], ids=["time_resolved", "static"])
+def test_transport_snapshot_takes_the_face_grid(
+    module: ModuleType, reader: str, time_resolved: bool, tmp_path: Path
+) -> None:
+    path = _write_transport_h5(tmp_path / "transport_solution.h5", time_resolved=time_resolved)
+    snap = getattr(module, reader)(path, time_index=-1)
+    ramp_f = np.arange(3 * 6, dtype=float).reshape(3, 6)
+    offset = 100.0 if time_resolved else 0.0  # the last of two slices, or the only one
+    assert_allclose(snap.rho, np.linspace(0.0, 1.0, 6), rtol=1e-12)
+    assert_allclose(snap.density, offset + 5.0 + 0.1 * ramp_f, rtol=1e-12)
+    assert_allclose(snap.temperature, offset + 7.0 + 0.2 * ramp_f, rtol=1e-12)
+    assert_allclose(snap.er, offset + np.linspace(-2.0, 4.0, 6), rtol=1e-12)
+
+
+# A solution from a NEOPAX predating the staggered grid carries no face datasets. Falling back to the centers would
+# hand NEOPAX a grid covering neither end of [0, rho_edge], so the reader refuses and names what is missing.
+@pytest.mark.parametrize(("module", "reader"), TRANSPORT_READERS)
+def test_transport_snapshot_requires_the_face_datasets(module: ModuleType, reader: str, tmp_path: Path) -> None:
+    path = _write_transport_h5(tmp_path / "old_pin.h5", faces=False)
+    with pytest.raises(KeyError, match="density_faces"):
+        getattr(module, reader)(path, time_index=-1)
+
+
+# A static solution holds one slice, so any --time-index other than the default -1 names a slice that does not exist.
+# Silently reading slice 0 anyway records a time_index in the manifest that the run did not honour, and the mismatch
+# only surfaces later when Stage 5's feedback writer rejects the same index.
+@pytest.mark.parametrize(("module", "reader"), TRANSPORT_READERS)
+@pytest.mark.parametrize("bad", [0, 1, -2])
+def test_static_transport_snapshot_rejects_a_non_default_time_index(
+    module: ModuleType, reader: str, bad: int, tmp_path: Path
+) -> None:
+    path = _write_transport_h5(tmp_path / "static.h5", time_resolved=False)
+    with pytest.raises(ValueError, match="single static profile slice"):
+        getattr(module, reader)(path, time_index=bad)
