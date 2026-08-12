@@ -19,7 +19,7 @@ from .utils import apply_assignments
 
 
 def _validate_neopax_profiles(cfg: dict[str, Any], template: str) -> None:
-    """Raise if NEOPAX could not load a config's prescribed ``[profiles]`` section.
+    """Validate a prescribed ``[profiles]`` section for the closed-loop pipeline.
 
     Parameters
     ----------
@@ -35,8 +35,7 @@ def _validate_neopax_profiles(cfg: dict[str, Any], template: str) -> None:
     Raises
     ------
     ValueError
-        If ``[profiles].model`` is prescribed and the block's arrays are missing, mis-shaped, or
-        inconsistent with ``[species].names`` and ``[geometry].n_radial``.
+        If required state arrays are missing or have incorrect species or radial dimensions.
     """
     profiles = cfg.get("profiles")
     if not isinstance(profiles, dict):
@@ -45,24 +44,48 @@ def _validate_neopax_profiles(cfg: dict[str, Any], template: str) -> None:
     if model not in ("prescribed", "given"):
         return
 
-    n_species = len(cfg.get("species", {}).get("names", []))
-    n_radial = cfg.get("geometry", {}).get("n_radial")
-    for key, ndim in (("density", 2), ("temperature", 2), ("Er", 1)):
+    species = cfg.get("species")
+    names = species.get("names") if isinstance(species, dict) else None
+    if not isinstance(names, list) or not names:
+        raise ValueError(f"{template}: prescribed profiles require a nonempty [species].names array.")
+    n_species = len(names)
+
+    geometry = cfg.get("geometry")
+    n_radial = geometry.get("n_radial") if isinstance(geometry, dict) else None
+    if not isinstance(n_radial, int) or isinstance(n_radial, bool) or n_radial < 1:
+        raise ValueError(f"{template}: prescribed profiles require a positive integer [geometry].n_radial.")
+
+    arrays = (
+        ("density", 2, n_radial, "[geometry].n_radial"),
+        ("temperature", 2, n_radial, "[geometry].n_radial"),
+        ("Er", 1, n_radial, "[geometry].n_radial"),
+        ("density_face", 2, n_radial + 1, "[geometry].n_radial + 1"),
+        ("temperature_face", 2, n_radial + 1, "[geometry].n_radial + 1"),
+        ("Er_face", 1, n_radial + 1, "[geometry].n_radial + 1"),
+        ("density_grad_face", 2, n_radial + 1, "[geometry].n_radial + 1"),
+        ("temperature_grad_face", 2, n_radial + 1, "[geometry].n_radial + 1"),
+    )
+    for key, ndim, radial_size, radial_source in arrays:
         value = profiles.get(key)
         if value is None:
             raise ValueError(f"{template}: [profiles].model is {model!r} but [profiles].{key} is missing.")
-        rows = value if ndim == 2 else [value]
-        if not isinstance(value, list) or (ndim == 2 and not all(isinstance(row, list) for row in value)):
+        is_table = isinstance(value, list) and all(
+            isinstance(row, list) and all(not isinstance(item, list) for item in row)
+            for row in value
+        )
+        is_vector = isinstance(value, list) and all(not isinstance(item, list) for item in value)
+        if (ndim == 2 and not is_table) or (ndim == 1 and not is_vector):
             raise ValueError(f"{template}: [profiles].{key} must be a {ndim}-D array of numbers.")
-        if ndim == 2 and n_species and len(value) != n_species:
+        rows = value if ndim == 2 else [value]
+        if ndim == 2 and len(value) != n_species:
             raise ValueError(
                 f"{template}: [profiles].{key} holds {len(value)} species rows, expected {n_species} "
                 "to match [species].names."
             )
-        if n_radial is not None and any(len(row) != int(n_radial) for row in rows):
+        if any(len(row) != radial_size for row in rows):
             raise ValueError(
-                f"{template}: [profiles].{key} rows must hold {int(n_radial)} points to match "
-                "[geometry].n_radial."
+                f"{template}: [profiles].{key} rows must hold {radial_size} points to match "
+                f"{radial_source}."
             )
 
 
@@ -130,8 +153,7 @@ def prepare_neopax_config(
     Raises
     ------
     ValueError
-        If the template's ``[profiles]`` section is one NEOPAX could not load. Checked here so
-        the run stops at parse time rather than after every upstream stage has run.
+        If prescribed profiles do not contain the center and face state required by Stages 3-5.
     """
     resolved = Path(s5_resolved_config)
     resolved.parent.mkdir(parents=True, exist_ok=True)

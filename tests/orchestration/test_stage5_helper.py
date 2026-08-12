@@ -105,11 +105,15 @@ def test_read_rho_edge_rejects_a_value_outside_the_unit_interval(tmp_path: Path,
 _SPECIES_AND_GEOMETRY = '[species]\nnames = ["e", "ion"]\n\n[geometry]\nn_radial = 3\n\n'
 
 
-def _prepare_with_profiles(tmp_path: Path, profiles: str) -> None:
-    """Resolve a config whose ``[profiles]`` section is ``profiles``, raising on invalid ones."""
+def _prepare_with_profiles(
+    tmp_path: Path,
+    profiles: str,
+    structure: str = _SPECIES_AND_GEOMETRY,
+) -> None:
+    """Resolve a config with the supplied profile and dimension blocks."""
     template = tmp_path / "inputs" / "common_input.toml"
     template.parent.mkdir(parents=True, exist_ok=True)
-    template.write_text(_TEMPLATE + "\n" + _SPECIES_AND_GEOMETRY + profiles)
+    template.write_text(_TEMPLATE + "\n" + structure + profiles)
     out = tmp_path / "out"
     prepare_neopax_config(
         s5_config_template=str(template),
@@ -139,46 +143,141 @@ def test_per_species_lists_under_the_analytical_model_are_accepted(tmp_path: Pat
     )
 
 
-_VALID_PRESCRIBED = (
-    '[profiles]\nmodel = "prescribed"\n'
-    "density = [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]\n"
-    "temperature = [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]\n"
-    "Er = [0.0, 0.0, 0.0]\n"
+_VALID_PRESCRIBED = """\
+[profiles]
+model = "prescribed"
+density = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+temperature = [[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]]
+Er = [0.0, 0.1, 0.2]
+density_face = [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]
+temperature_face = [[9.0, 10.0, 11.0, 12.0], [13.0, 14.0, 15.0, 16.0]]
+Er_face = [0.0, 0.1, 0.2, 0.3]
+density_grad_face = [[1.0, 1.0, 1.0, 1.0], [2.0, 2.0, 2.0, 2.0]]
+temperature_grad_face = [[3.0, 3.0, 3.0, 3.0], [4.0, 4.0, 4.0, 4.0]]
+"""
+
+_REQUIRED_PRESCRIBED_ARRAYS = (
+    "density",
+    "temperature",
+    "Er",
+    "density_face",
+    "temperature_face",
+    "Er_face",
+    "density_grad_face",
+    "temperature_grad_face",
 )
+
+_SPECIES_RESOLVED_ARRAYS = (
+    "density",
+    "temperature",
+    "density_face",
+    "temperature_face",
+    "density_grad_face",
+    "temperature_grad_face",
+)
+
+
+def _replace_profile_value(profiles: str, key: str, value: str | None) -> str:
+    """Replace or remove one assignment in a profile fixture."""
+    prefix = f"{key} = "
+    lines = profiles.splitlines()
+    matches = [index for index, line in enumerate(lines) if line.startswith(prefix)]
+    assert len(matches) == 1
+    index = matches[0]
+    if value is None:
+        del lines[index]
+    else:
+        lines[index] = prefix + value
+    return "\n".join(lines) + "\n"
 
 
 def test_valid_prescribed_block_is_accepted(tmp_path: Path) -> None:
     _prepare_with_profiles(tmp_path, _VALID_PRESCRIBED)
 
 
+@pytest.mark.parametrize("key", _REQUIRED_PRESCRIBED_ARRAYS)
+def test_prescribed_block_requires_each_state_array(tmp_path: Path, key: str) -> None:
+    """The validator must reject each missing center, face, or gradient array."""
+    profiles = _replace_profile_value(_VALID_PRESCRIBED, key, None)
+    with pytest.raises(ValueError, match=rf"\[profiles\]\.{key} is missing"):
+        _prepare_with_profiles(tmp_path, profiles)
+
+
 @pytest.mark.parametrize(
-    "profiles, message",
+    ("key", "one_row"),
     [
-        pytest.param(
-            '[profiles]\nmodel = "prescribed"\ndensity = [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]\n',
-            r"\[profiles\].temperature is missing",
-            id="missing-array",
-        ),
-        pytest.param(
-            _VALID_PRESCRIBED.replace("density = [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]", "density = [[1.0, 2.0, 3.0]]"),
-            r"holds 1 species rows, expected 2",
-            id="species-row-count",
-        ),
-        pytest.param(
-            _VALID_PRESCRIBED.replace("Er = [0.0, 0.0, 0.0]", "Er = [0.0, 0.0]"),
-            r"rows must hold 3 points",
-            id="radial-point-count",
-        ),
-        pytest.param(
-            _VALID_PRESCRIBED.replace("density = [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]", "density = [1.0, 2.0, 3.0]"),
-            r"must be a 2-D array",
-            id="wrong-rank",
-        ),
+        ("density", "[[1.0, 2.0, 3.0]]"),
+        ("temperature", "[[1.0, 2.0, 3.0]]"),
+        ("density_face", "[[1.0, 2.0, 3.0, 4.0]]"),
+        ("temperature_face", "[[1.0, 2.0, 3.0, 4.0]]"),
+        ("density_grad_face", "[[1.0, 2.0, 3.0, 4.0]]"),
+        ("temperature_grad_face", "[[1.0, 2.0, 3.0, 4.0]]"),
     ],
 )
-def test_malformed_prescribed_blocks_are_rejected(tmp_path: Path, profiles: str, message: str) -> None:
-    with pytest.raises(ValueError, match=message):
+def test_species_resolved_arrays_match_species_names(tmp_path: Path, key: str, one_row: str) -> None:
+    """Each species-resolved array must contain one row per species name."""
+    profiles = _replace_profile_value(_VALID_PRESCRIBED, key, one_row)
+    with pytest.raises(ValueError, match=r"holds 1 species rows, expected 2"):
         _prepare_with_profiles(tmp_path, profiles)
+
+
+@pytest.mark.parametrize(
+    ("key", "short_value", "expected_size"),
+    [
+        ("density", "[[1.0, 2.0], [3.0, 4.0]]", 3),
+        ("temperature", "[[1.0, 2.0], [3.0, 4.0]]", 3),
+        ("Er", "[0.0, 0.1]", 3),
+        ("density_face", "[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]", 4),
+        ("temperature_face", "[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]", 4),
+        ("Er_face", "[0.0, 0.1, 0.2]", 4),
+        ("density_grad_face", "[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]", 4),
+        ("temperature_grad_face", "[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]", 4),
+    ],
+)
+def test_profile_arrays_match_their_radial_grid(
+    tmp_path: Path,
+    key: str,
+    short_value: str,
+    expected_size: int,
+) -> None:
+    """Center arrays use n_radial points and face arrays use one more point."""
+    profiles = _replace_profile_value(_VALID_PRESCRIBED, key, short_value)
+    with pytest.raises(ValueError, match=rf"rows must hold {expected_size} points"):
+        _prepare_with_profiles(tmp_path, profiles)
+
+
+@pytest.mark.parametrize(
+    ("key", "wrong_rank", "ndim"),
+    [
+        *((key, "[1.0, 2.0, 3.0]", 2) for key in _SPECIES_RESOLVED_ARRAYS),
+        ("Er", "[[0.0, 0.1, 0.2]]", 1),
+        ("Er_face", "[[0.0, 0.1, 0.2, 0.3]]", 1),
+    ],
+)
+def test_profile_arrays_have_the_required_rank(
+    tmp_path: Path,
+    key: str,
+    wrong_rank: str,
+    ndim: int,
+) -> None:
+    """The validator must reject vectors and tables in the wrong positions."""
+    profiles = _replace_profile_value(_VALID_PRESCRIBED, key, wrong_rank)
+    with pytest.raises(ValueError, match=rf"must be a {ndim}-D array"):
+        _prepare_with_profiles(tmp_path, profiles)
+
+
+def test_prescribed_block_requires_species_names(tmp_path: Path) -> None:
+    """Species dimensions require a nonempty names array."""
+    structure = "[geometry]\nn_radial = 3\n\n"
+    with pytest.raises(ValueError, match=r"\[species\]\.names"):
+        _prepare_with_profiles(tmp_path, _VALID_PRESCRIBED, structure)
+
+
+def test_prescribed_block_requires_n_radial(tmp_path: Path) -> None:
+    """Radial dimensions require a positive integer n_radial value."""
+    structure = '[species]\nnames = ["e", "ion"]\n\n[geometry]\n\n'
+    with pytest.raises(ValueError, match=r"\[geometry\]\.n_radial"):
+        _prepare_with_profiles(tmp_path, _VALID_PRESCRIBED, structure)
 
 
 # Every tracked run config must pass the parse-time validation.
