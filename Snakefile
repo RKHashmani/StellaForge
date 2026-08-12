@@ -210,6 +210,7 @@ if RERUN["stage3"]:
         input:
             config_file = S3_CONFIG,
             wout        = S1_OUTPUT,
+            boozer      = S2_OUTPUT,
             common_config = S5_CONFIG,
         output:
             S3_MANIFEST,

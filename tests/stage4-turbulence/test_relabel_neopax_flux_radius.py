@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
+from common import neopax_geometry as geometry
 from tests.helpers.stage_import import load_stage_module
 
 relabel = load_stage_module("stages/stage4-turbulence/relabel_neopax_flux_radius.py")
@@ -81,15 +82,15 @@ def _write_boozmn(path: Path, *, r00: float, with_rmnc: bool = True) -> Path:
 
 def test_minor_radius_from_volume_reproduces_the_w7x_a_b():
     """The formula must match what NEOPAX derives, or the relabelling targets the wrong grid."""
-    assert_allclose(relabel.minor_radius_from_volume(W7X_VOLUME_P, W7X_R00_BOOZER), W7X_A_B, rtol=1e-12)
+    assert_allclose(geometry.minor_radius_from_volume(W7X_VOLUME_P, W7X_R00_BOOZER), W7X_A_B, rtol=1e-12)
 
 
 # The two radii disagree in opposite directions on the two shipped equilibria, a_b/Aminor_p being
 # 1.00828 for W7-X and 0.98958 for HSX, so a fixed sign must never be assumed.
 def test_the_two_radii_disagree_in_both_directions():
     """W7-X puts NEOPAX's grid outside the flux file's; HSX puts it inside."""
-    w7x_ratio = relabel.minor_radius_from_volume(W7X_VOLUME_P, W7X_R00_BOOZER) / W7X_AMINOR_P
-    hsx_ratio = relabel.minor_radius_from_volume(HSX_VOLUME_P, HSX_R00_BOOZER) / HSX_AMINOR_P
+    w7x_ratio = geometry.minor_radius_from_volume(W7X_VOLUME_P, W7X_R00_BOOZER) / W7X_AMINOR_P
+    hsx_ratio = geometry.minor_radius_from_volume(HSX_VOLUME_P, HSX_R00_BOOZER) / HSX_AMINOR_P
     assert_allclose(w7x_ratio, 1.00828, rtol=1e-4)
     assert_allclose(hsx_ratio, 0.98958, rtol=1e-4)
 
@@ -97,7 +98,7 @@ def test_the_two_radii_disagree_in_both_directions():
 @pytest.mark.parametrize(("volume_p", "r_major"), [(0.0, 5.0), (-1.0, 5.0), (26.0, 0.0), (26.0, -5.0), (np.nan, 5.0)])
 def test_minor_radius_from_volume_rejects_invalid_geometry(volume_p, r_major):
     with pytest.raises(ValueError):
-        relabel.minor_radius_from_volume(volume_p, r_major)
+        geometry.minor_radius_from_volume(volume_p, r_major)
 
 
 # --- read_neopax_minor_radius ---
@@ -107,7 +108,7 @@ def test_read_neopax_minor_radius_uses_the_boundary_r00(tmp_path):
     wout = _write_wout(tmp_path / "wout.nc", volume_p=W7X_VOLUME_P, r_major=W7X_RMAJOR_P, a_minor=W7X_AMINOR_P)
     boozer = _write_boozmn(tmp_path / "boozmn.nc", r00=W7X_R00_BOOZER)
 
-    assert_allclose(relabel.read_neopax_minor_radius(wout, boozer), W7X_A_B, rtol=1e-12)
+    assert_allclose(geometry.read_neopax_minor_radius(wout, boozer), W7X_A_B, rtol=1e-12)
 
 
 def test_read_neopax_minor_radius_reports_a_wout_without_volume(tmp_path):
@@ -115,7 +116,7 @@ def test_read_neopax_minor_radius_reports_a_wout_without_volume(tmp_path):
     boozer = _write_boozmn(tmp_path / "boozmn.nc", r00=W7X_R00_BOOZER)
 
     with pytest.raises(KeyError, match="volume_p"):
-        relabel.read_neopax_minor_radius(wout, boozer)
+        geometry.read_neopax_minor_radius(wout, boozer)
 
 
 def test_read_neopax_minor_radius_reports_a_boozer_file_without_rmnc(tmp_path):
@@ -123,7 +124,7 @@ def test_read_neopax_minor_radius_reports_a_boozer_file_without_rmnc(tmp_path):
     boozer = _write_boozmn(tmp_path / "boozmn.nc", r00=W7X_R00_BOOZER, with_rmnc=False)
 
     with pytest.raises(KeyError, match="rmnc_b"):
-        relabel.read_neopax_minor_radius(wout, boozer)
+        geometry.read_neopax_minor_radius(wout, boozer)
 
 
 # --- neopax_radial_grid ---

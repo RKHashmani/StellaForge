@@ -10,13 +10,12 @@ from __future__ import annotations
 
 LOOP_STAGES: tuple[str, ...] = ("stage1", "stage2", "stage3", "stage4", "stage5")
 
-# Stages whose output artifacts each stage reads directly, taken from the Snakefile rule inputs. Stage 3 reads only the
-# Stage 1 equilibrium and never the Boozer transform. The map covers stage outputs only. Stages 3 and 4 also read the
-# common_input profiles, which evolve each iteration, so freezing either deliberately keeps fluxes computed from an
-# earlier pass's profiles.
+# This map lists the stage outputs that each stage reads directly. Snakefile rule inputs define it.
+# Stages 3 and 4 also read profiles from ``common_input``. These profiles change in each iteration.
+# A frozen stage therefore keeps fluxes calculated from an earlier profile state.
 _STAGE_INPUTS: dict[str, tuple[str, ...]] = {
     "stage2": ("stage1",),
-    "stage3": ("stage1",),
+    "stage3": ("stage1", "stage2"),
     "stage4": ("stage1", "stage2"),
     "stage5": ("stage1", "stage2", "stage3", "stage4"),
 }
@@ -85,13 +84,13 @@ def _check_frozen_stage_inputs(flags: dict[str, bool]) -> None:
 
 
 def resolve_rerun_flags(config: dict) -> dict[str, bool]:
-    """Turn a run config's ``loop.rerun`` block into a rerun flag for every pipeline stage.
+    """Return one rerun flag for each pipeline stage.
 
     Parameters
     ----------
     config : dict
-        Parsed run config. The optional ``loop.rerun`` mapping holds a boolean per stage name, where false freezes that
-        stage so later loop iterations reuse its iteration 1 output. Stages left out default to rerunning.
+        Parsed run config. The optional ``loop.rerun`` mapping contains one boolean per stage.
+        ``false`` reuses the stage output from iteration 1. Omitted stages rerun.
 
     Returns
     -------
@@ -101,14 +100,13 @@ def resolve_rerun_flags(config: dict) -> dict[str, bool]:
     Raises
     ------
     ValueError
-        If ``loop`` or ``loop.rerun`` is present but is not a mapping, if ``rerun`` names a stage outside
-        ``LOOP_STAGES``, if any value is not a real boolean, or if a frozen stage reads from a stage that reruns.
+        If a loop setting is invalid or a frozen stage reads output from a stage that reruns.
 
     Notes
     -----
-    Requiring a frozen stage's input stages to be frozen too leaves only eight usable frozen sets, which are the empty
-    set, ``{stage1}``, ``{stage1, stage2}``, ``{stage1, stage3}``, ``{stage1, stage2, stage3}``,
-    ``{stage1, stage2, stage4}``, ``{stage1, stage2, stage3, stage4}``, and all five stages.
+    A frozen stage requires frozen input stages. The valid frozen sets are:
+    ``{}``, ``{stage1}``, ``{stage1, stage2}``, ``{stage1, stage2, stage3}``,
+    ``{stage1, stage2, stage4}``, ``{stage1, stage2, stage3, stage4}`` and all five stages.
     """
     loop = _read_optional_mapping(config, "loop", "config['loop']", "loop settings")
     rerun = _read_optional_mapping(loop, "rerun", "config['loop']['rerun']", "stage name to true/false")

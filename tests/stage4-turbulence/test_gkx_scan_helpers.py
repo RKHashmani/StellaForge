@@ -26,7 +26,7 @@ from tests.helpers.stage_import import load_stage_module
 scan = load_stage_module("stages/stage4-turbulence/gkx_radial_scan.py")
 
 
-# --- _gkx_flux_to_neopax_units ---
+# Flux unit conversion
 
 # `_gkx_flux_to_neopax_units` converts a dimensionless (gyro-Bohm) flux into physical units. The heat flux Q
 # carries one extra factor of temperature (in eV) compared to the particle flux Gamma. Converting the same raw value
@@ -72,7 +72,7 @@ def test_flux_units_unknown_kind_raises() -> None:
         )
 
 
-# --- _expand_axis_zero_if_needed ---
+# Magnetic-axis expansion
 
 def _expand_inputs(n_species: int = 3, n: int = 2) -> dict:
     return {
@@ -149,7 +149,7 @@ def test_expand_passthrough_on_index_mismatch() -> None:
     assert out[0].shape == (2,)
 
 
-# --- _warn_unmatched_perturb_species ---
+# Perturbed-species warnings
 
 # A name matching no runtime species must produce a stderr warning (not a silent skip) that names the channel, quotes
 # the bad name, lists the available runtime species, and states only the unperturbed base runs execute for it.
@@ -171,7 +171,7 @@ def test_warn_unmatched_perturb_species_quiet_on_valid_and_empty(capsys: pytest.
     assert capsys.readouterr().err == ""
 
 
-# --- cmd_collect: flux_summary.h5 run-identity datasets ---
+# Run identity in flux_summary.h5
 
 def _collect_run_spec(tmp_path: Path, index: int, rho_index: int, rho: float, **response_fields: object) -> dict:
     # Pointing output_prefix at a directory with no diagnostics CSV drives collect down its zero-fill branch, which
@@ -238,7 +238,7 @@ def test_collect_flux_summary_identity_defaults_for_legacy_manifest(tmp_path: Pa
         assert_allclose(f["perturb_delta"][...], [0.0])
 
 
-# --- _validate_perturb_species_names ---
+# Perturbed-species validation
 
 # Species names are pasted into perturbed run-directory names, which Snakemake schedules only when the name contains
 # nothing but letters, digits, and underscores; the validator must therefore reject a name like "He-3" early, with an
@@ -272,7 +272,7 @@ def test_validate_perturb_species_names_rejects_reserved_names() -> None:
         assert f"'{name}'" in message
 
 
-# --- cmd_collect: neopax_fluxes.h5 perturbation axis ---
+# Perturbation axis in neopax_fluxes.h5
 
 # In fd_gradients mode collect keys the perturbation axis of neopax_fluxes.h5 on distinct (response_label,
 # perturb_species) pairs in first-seen manifest order (deliberately not alphabetical here), joining each perturbed run
@@ -307,7 +307,7 @@ def test_collect_neopax_omits_perturbed_datasets_for_base_only_manifest(tmp_path
             assert absent not in f
 
 
-# --- _write_runs_csv identity columns ---
+# Identity columns in runs.csv
 
 # runs.csv is the flat per-run planning summary; its full header order (basic run fields then the trailing identity
 # fields) is a stable contract.
@@ -343,10 +343,11 @@ def test_runs_csv_identity_columns(tmp_path: Path) -> None:
     assert [row["perturb_delta"] for row in rows] == ["0.0", "-0.5"]
 
 
-# --- prepare dispatch ---
+# Prepare dispatch
 
-# A complete prescribed common-input template for prepare-level tests. The species block carries the
-# charge/mass arrays the species parser requires; the profile arrays are SI on the 5-point grid.
+# Complete prescribed input for prepare tests. The [species] block supplies charge and mass. The
+# [profiles] arrays use SI values on five cells. Face arrays are linear in rho, with constant
+# gradients per unit rho.
 PRESCRIBED_TOML = """\
 [species]
 names = ["e", "D", "T"]
@@ -364,14 +365,15 @@ Er = [0.0, 1.0, 2.0, 3.0, 4.0]
 density_face = [[0.95e19, 1.05e19, 1.15e19, 1.25e19, 1.35e19, 1.45e19], [4.75e18, 5.25e18, 5.75e18, 6.25e18, 6.75e18, 7.25e18], [4.75e18, 5.25e18, 5.75e18, 6.25e18, 6.75e18, 7.25e18]]
 temperature_face = [[1050.0, 950.0, 850.0, 750.0, 650.0, 550.0], [1000.0, 900.0, 800.0, 700.0, 600.0, 500.0], [990.0, 890.0, 790.0, 690.0, 590.0, 490.0]]
 Er_face = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
+density_grad_face = [[5.0e18, 5.0e18, 5.0e18, 5.0e18, 5.0e18, 5.0e18], [2.5e18, 2.5e18, 2.5e18, 2.5e18, 2.5e18, 2.5e18], [2.5e18, 2.5e18, 2.5e18, 2.5e18, 2.5e18, 2.5e18]]
+temperature_grad_face = [[-500.0, -500.0, -500.0, -500.0, -500.0, -500.0], [-500.0, -500.0, -500.0, -500.0, -500.0, -500.0], [-500.0, -500.0, -500.0, -500.0, -500.0, -500.0]]
 """
 
 
-# The snapshot tests elsewhere call _build_prescribed_snapshot directly, so the cmd_prepare branch that routes
-# --profiles-source=prescribed to it (with no NEOPAX result) would go untested without this. Running the real
-# cmd_prepare against a prescribed template and a synthetic VMEC file must succeed without any transport file, record
-# the source in the manifest, and scan exactly the transport face grid minus the magnetic axis. [geometry].n_radial = 5
-# cells means 6 faces at linspace(0, 1, 6), of which the axis face is dropped, so 5 surfaces are scanned.
+# Other snapshot tests call the prescribed builder directly. This test covers command dispatch from
+# the prescribed profiles-source option. It uses no transport result. The command records the source
+# and scans the face grid without the magnetic axis. Here, [geometry].n_radial gives five cells and
+# six faces. Removing the axis leaves five scan surfaces.
 def test_cmd_prepare_dispatches_prescribed_source(tmp_path: Path) -> None:
     from tests.helpers.synthetic import write_wout
 
@@ -399,7 +401,47 @@ def test_cmd_prepare_dispatches_prescribed_source(tmp_path: Path) -> None:
     assert manifest["source_er"] == [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
 
 
-# --- _runtime_toml_text ---
+# Runtime profile gradients
+
+# ``tprim`` and ``fprim`` equal the negative face gradient divided by the value at that face.
+# They use no minor-radius factor. NEOPAX uses ``r = a * rho``, so ``a`` cancels against a gradient
+# per rho.
+# The reference factors also cancel in each ratio. This test detects extra scaling or recalculation.
+def test_runtime_species_gradients_are_the_face_gradient_over_the_face_value(tmp_path: Path) -> None:
+    from tests.helpers.synthetic import write_wout
+
+    config = tmp_path / "common_input.toml"
+    config.write_text(PRESCRIBED_TOML)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    args = scan.build_parser().parse_args([
+        "prepare",
+        "--common-config", str(config),
+        "--output-dir", str(out_dir),
+        "--profiles-source", "prescribed",
+        "--electron-model", "kinetic",
+        "--vmec-file-override", str(write_wout(tmp_path / "wout_synth.nc")),
+    ])
+    assert scan.cmd_prepare(args) == 0
+    manifest = json.loads((out_dir / "manifest.json").read_text())
+    block = tomllib.loads(PRESCRIBED_TOML)["profiles"]
+    density_face = np.asarray(block["density_face"])
+    temperature_face = np.asarray(block["temperature_face"])
+    density_grad_face = np.asarray(block["density_grad_face"])
+    temperature_grad_face = np.asarray(block["temperature_grad_face"])
+
+    assert [run["rho_index"] for run in manifest["runs"]] == [1, 2, 3, 4, 5]
+    for run in manifest["runs"]:
+        face = int(run["rho_index"])
+        assert [sp["name"] for sp in run["runtime_species"]] == ["e", "D", "T"]
+        for sp_idx, sp in enumerate(run["runtime_species"]):
+            expected_tprim = -temperature_grad_face[sp_idx, face] / temperature_face[sp_idx, face]
+            expected_fprim = -density_grad_face[sp_idx, face] / density_face[sp_idx, face]
+            assert_allclose(sp["tprim"], expected_tprim, rtol=1e-12)
+            assert_allclose(sp["fprim"], expected_fprim, rtol=1e-12)
+
+
+# Runtime TOML text
 
 def _write_template(tmp_path: Path, body: str) -> str:
     # A template with no [output] table leaves resolved_diagnostics on its hard default, and an empty body leaves
@@ -518,16 +560,10 @@ def test_prepare_shaping_flags_default_to_none() -> None:
     assert (args.t_max, args.sample_stride, args.diagnostics_stride) == (None, None, None)
 
 
-# --- load_neopax_snapshot: format dispatch ---
+# Transport layout recognition
 
-# `load_neopax_snapshot` serves two unrelated file layouts: a NEOPAX transport_solution.h5 and a flat NTSS-like file.
-# Dispatch happens on the file's shape before parsing, so a recognisable NEOPAX file keeps its own diagnostic.
-
-_SPECIES = [
-    scan.SpeciesMeta(name="e", charge=-1.0, mass_mp=0.000544617),
-    scan.SpeciesMeta(name="D", charge=1.0, mass_mp=2.0),
-    scan.SpeciesMeta(name="T", charge=1.0, mass_mp=3.0),
-]
+# ``load_neopax_snapshot`` reads only NEOPAX transport solutions. It identifies the layout before
+# parsing. A recognized NEOPAX file therefore keeps the loader's specific error.
 
 
 def _write_ntss_like(path: Path, n_r: int = 6) -> Path:
@@ -542,9 +578,8 @@ def _write_ntss_like(path: Path, n_r: int = 6) -> Path:
     return path
 
 
-# A NEOPAX transport solution written before the staggered grid is recognisable as a NEOPAX file, so the reader's own
-# "missing the transport face datasets" error is the useful one and must reach the caller. Falling through to the NTSS
-# parser would report that the file lacks `r` and `Er`, which is true but tells the user nothing about the real cause.
+# A solution from before the staggered grid is still a NEOPAX file. The caller must receive the
+# specific ``missing the transport face datasets`` error instead of a generic layout error.
 def test_load_neopax_snapshot_surfaces_the_missing_face_diagnostic(tmp_path: Path) -> None:
     from tests.helpers.synthetic import write_transport_solution
 
@@ -554,11 +589,11 @@ def test_load_neopax_snapshot_surfaces_the_missing_face_diagnostic(tmp_path: Pat
         density=np.ones((3, 5)), temperature=np.ones((3, 5)), er=np.zeros(5),
     )
     with pytest.raises(KeyError, match="transport face datasets"):
-        scan.load_neopax_snapshot(path, _SPECIES, time_index=-1)
+        scan.load_neopax_snapshot(path, time_index=-1)
 
 
-# A genuinely NTSS-shaped file routes to the NTSS parser.
-def test_load_neopax_snapshot_still_falls_back_to_the_ntss_parser(tmp_path: Path) -> None:
-    snap = scan.load_neopax_snapshot(_write_ntss_like(tmp_path / "ntss.h5"), _SPECIES, time_index=-1)
-    assert snap.density.shape == (3, 6)
-    assert_allclose(snap.rho, np.linspace(0.0, 1.0, 6), rtol=1e-12)
+# A flat NTSS-like file has no face grid or NEOPAX [boundary] models. A reader cannot recover the
+# face gradients. Reject the file instead of creating gradients locally.
+def test_load_neopax_snapshot_rejects_the_flat_ntss_layout(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="not a NEOPAX transport_solution.h5"):
+        scan.load_neopax_snapshot(_write_ntss_like(tmp_path / "ntss.h5"), time_index=-1)

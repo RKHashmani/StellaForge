@@ -22,7 +22,6 @@ VALID_FROZEN_SETS = [
     (),
     ("stage1",),
     ("stage1", "stage2"),
-    ("stage1", "stage3"),
     ("stage1", "stage2", "stage3"),
     ("stage1", "stage2", "stage4"),
     ("stage1", "stage2", "stage3", "stage4"),
@@ -85,8 +84,7 @@ def test_explicit_true_matches_the_default() -> None:
     assert resolve_rerun_flags(explicit) == resolve_rerun_flags(_frozen("stage1"))
 
 
-# The eight combinations below are every frozen set consistent with the stage input dependencies. Each must be accepted
-# and returned faithfully, since these are exactly the configurations a user is allowed to write.
+# These seven frozen sets satisfy all stage input dependencies. Each set must pass unchanged.
 @pytest.mark.parametrize("frozen", VALID_FROZEN_SETS)
 def test_valid_frozen_sets_are_accepted(frozen: tuple[str, ...]) -> None:
     flags = resolve_rerun_flags(_frozen(*frozen))
@@ -106,7 +104,9 @@ def test_valid_frozen_sets_are_accepted(frozen: tuple[str, ...]) -> None:
         (("stage1", "stage4"), "stage4"),
         (("stage2", "stage3", "stage4", "stage5"), "stage2"),
         (("stage1", "stage2", "stage3", "stage5"), "stage5"),
-        (("stage1", "stage3", "stage4"), "stage4"),
+        # Stage 3 reads the Boozer transform. Freezing Stage 3 also requires a frozen Stage 2.
+        (("stage1", "stage3"), "stage3"),
+        (("stage1", "stage3", "stage4"), "stage3"),
     ],
 )
 def test_frozen_stage_with_rerunning_input_is_rejected(frozen: tuple[str, ...], offender: str) -> None:

@@ -384,13 +384,13 @@ def test_overrides_carry_rerun_flags_and_the_reuse_tree(monkeypatch: pytest.Monk
     assert overrides["loop"]["reuse_output_dir"] == f"{tmp_path}/out/loop/iter_1/output"
 
 
-# A frozen stage never runs, so switching it to prescribed profiles would describe a run that does not happen. With
-# Stages 1 and 3 frozen the overrides file must drop the stage3 block entirely while still switching the Stage 4 run and
-# still carrying the loop block, since Stage 4 and Stage 5 do rerun and read the prescribed profiles.
+# A frozen stage does not need a prescribed-profile override. With Stages 1, 2 and 3 frozen, the
+# file omits the Stage 3 block. It keeps the Stage 4 and loop blocks because Stages 4 and 5 rerun.
+# Stage 3 reads the Boozer transform, so this case also freezes Stage 2.
 def test_overrides_omit_the_prescribed_switch_for_a_frozen_stage(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    config_path = _write_config(tmp_path, loop={"rerun": {"stage1": False, "stage3": False}})
+    config_path = _write_config(tmp_path, loop={"rerun": {"stage1": False, "stage2": False, "stage3": False}})
 
     overrides = _overrides_of_second_iteration(monkeypatch, config_path)
 
