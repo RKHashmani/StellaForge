@@ -190,7 +190,7 @@ The Dockerfile uses a multi-stage build on a `ghcr.io/prefix-dev/pixi:noble` bas
 
 **Adding or updating a stage dependency:**
 1. Update `stages/pixi.toml` (add/change the dependency or git rev)
-2. Run `pixi lock --manifest-path stages/pixi.toml` (or `pixi install ...` to also install locally)
+2. Re-solve the lockfile in a `linux/amd64` container, as below
 3. Commit both `stages/pixi.toml` and `stages/pixi.lock`
 4. CI rebuilds affected container images on merge
 
@@ -198,6 +198,21 @@ The stages workspace requires Pixi 0.71 or newer. GPU environments resolve on
 the named `linux-64-cuda` platform, which declares CUDA 12 independently of the
 machine generating the lockfile; CPU environments continue to use the standard
 platform names.
+
+A macOS host cannot re-solve that lockfile at all. Pixi does not cross-solve the custom
+`linux-64-cuda` platform from `osx-arm64`, and `CONDA_OVERRIDE_CUDA=12` does not help, so step 2 is
+a container:
+
+```
+docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work -e CONDA_OVERRIDE_CUDA=12 \
+  ghcr.io/prefix-dev/pixi:0.73.0-noble bash -lc \
+  'apt-get update -qq && apt-get install -y -qq git; pixi lock --manifest-path stages/pixi.toml'
+```
+
+The `apt-get` line is there because the pixi image ships without git, which the git-sourced
+dependencies need. Keep the tag at `0.73.0-noble`. `0.66.0` cannot parse the `linux-64-cuda`
+platform table, and `0.75.0` fails to link. `.gitattributes` marks `pixi.lock` `-diff`, so review
+the result with `git diff --text stages/pixi.lock`.
 
 Updating the orchestration env follows the same pattern against the root `pixi.toml` / `pixi.lock`. If that update moves `pipeline`'s Snakemake, repin `feature.htcondor-runtime` to match and rebuild `htcondor-runtime.sif`.
 
