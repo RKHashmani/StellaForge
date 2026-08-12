@@ -35,7 +35,7 @@ def _fake_forward_pass(*, target: str, **kwargs) -> None:
     """
     signal = Path(target)
     signal.parent.mkdir(parents=True, exist_ok=True)
-    signal.write_text(json.dumps({}))
+    signal.write_text(json.dumps({"status": "continue"}))
 
 
 def _write_config_with_gpu_defaults(tmp_path: Path) -> Path:

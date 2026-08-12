@@ -1,19 +1,17 @@
-"""Tests for the ``transport_solution.h5`` contract in ``src/io_contracts.py``.
+"""Test the ``transport_solution.h5`` contract.
 
-The contract covers the fields read by the Stage 3/4/5 transport-snapshot loaders. NEOPAX
-solves on a staggered finite-volume grid, so the file carries both halves and both are
-required: the cell-centered ``rho``/``density``/``temperature``/``Er`` and the face-grid
-``rho_face``/``density_faces``/``temperature_faces``/``Er_faces``, with ``Er`` and
-``Er_faces`` carrying no species axis. Optional: ``pressure``/``pressure_faces``/``ts``.
-``temperature`` is required and ``pressure`` optional because the Stage 3 loader accepts
-either and derives the missing one, while the Stage 4 loader hard-requires ``temperature``
-with no pressure fallback; the face datasets follow the same rule.
+The contract covers fields read by the Stage 3, 4 and 5 loaders. It requires centered state and
+face state on the staggered grid. ``Er`` and ``Er_faces`` omit the species axis.
 
-Beyond presence, the invariants are about axes rather than ranks: the two grids differ only
-in their trailing radial axis, ``rho_face`` holds one more point than ``rho`` and increases
-strictly outward with ``rho`` at its midpoints, and ``ts`` holds one timestamp per slice.
-Malformed cases run on the inner checker; the valid, missing-Er and missing-face files
-exercise the h5 read plus the raise.
+The contract also requires both face gradients and the metre-valued ``r_grid_half``. ``pressure``,
+``pressure_faces`` and ``ts`` are optional. Stage 4 requires ``temperature``, so the contract also
+requires it on both grids.
+
+The grids can differ only on the trailing radial axis. ``rho_face`` has one more point than ``rho``
+and increases outward. Each center is a face midpoint. ``ts`` has one value per slice.
+
+The shared loader checks gradients, minor radius and clock values. Its tests cover individual
+dataset errors. This file checks the validator's :class:`ContractError` wrapper.
 """
 
 from __future__ import annotations
@@ -25,6 +23,13 @@ import pytest
 
 from src.io_contracts import ContractError, _check_transport_solution, validate_transport_solution
 from tests.helpers.synthetic import write_transport_solution
+
+
+# NEOPAX's minor radius, the metres per unit rho of its face grid.
+MINOR_RADIUS_M = 0.5
+# The solver clock contains the reached time and the next step.
+FINAL_TIME_S = 0.25
+NEXT_DT_S = 0.03
 
 
 def _staggered_grid(n_rho: int) -> tuple[np.ndarray, np.ndarray]:
@@ -50,6 +55,11 @@ def _valid_data(n_species: int = 3, n_rho: int = 5) -> dict[str, np.ndarray | No
         "temperature_faces": face_profile.copy(),
         "pressure_faces": None,
         "Er_faces": np.ones(n_rho + 1),
+        "r_grid_half": MINOR_RADIUS_M * rho_face,
+        "density_grad_faces": face_profile.copy(),
+        "temperature_grad_faces": face_profile.copy(),
+        "final_time": np.asarray(FINAL_TIME_S),
+        "next_dt": np.asarray(NEXT_DT_S),
     }
 
 
@@ -137,6 +147,9 @@ def test_valid_file_passes(tmp_path: Path) -> None:
         tmp_path / "t.h5", rho=rho, density=profile, temperature=profile, er=np.ones(5),
         rho_face=rho_face, density_face=face_profile,
         temperature_face=face_profile, er_face=np.ones(6),
+        r_grid_half=MINOR_RADIUS_M * rho_face,
+        density_grad_face=face_profile, temperature_grad_face=face_profile,
+        final_time=FINAL_TIME_S, next_dt=NEXT_DT_S,
     )
     assert validate_transport_solution(written) is None
 
@@ -151,7 +164,7 @@ def test_file_missing_er_raises(tmp_path: Path) -> None:
         validate_transport_solution(written)
 
 
-# --- the face grid ---
+# Face grid
 
 # NEOPAX solves on a staggered grid, and the consumers of this file split over which half they read. Stages 3 and 4
 # sample fluxes on the faces and the loop's feedback writer copies the face state into the prescribed block; the
@@ -226,7 +239,7 @@ def test_face_and_centre_rank_mismatch_flagged() -> None:
 
 # End-to-end: a file written without the face datasets, as a NEOPAX predating the staggered grid would write it, is
 # rejected by the file-level validator. Such a file could still drive a forward pass, whose consumers read only the
-# centers, but not a loop iteration -- and the contract holds the artifact to the latter.
+# centers. It cannot drive a loop iteration, which also requires the face state.
 def test_file_without_the_face_datasets_raises(tmp_path: Path) -> None:
     profile = np.ones((3, 5))
     rho, _ = _staggered_grid(5)
@@ -238,7 +251,59 @@ def test_file_without_the_face_datasets_raises(tmp_path: Path) -> None:
         validate_transport_solution(written)
 
 
-# --- leading axes, not just rank ---
+# Face gradients and solver clock
+
+
+# An early staggered-grid format can contain face state without face gradients. Reject this format.
+def test_file_without_the_gradient_datasets_raises(tmp_path: Path) -> None:
+    rho, rho_face = _staggered_grid(5)
+    profile = np.ones((3, 5))
+    face_profile = np.ones((3, 6))
+    written = write_transport_solution(
+        tmp_path / "no_gradients.h5", rho=rho, density=profile, temperature=profile, er=np.ones(5),
+        rho_face=rho_face, density_face=face_profile, temperature_face=face_profile, er_face=np.ones(6),
+    )
+    with pytest.raises(ContractError, match="density_grad_faces"):
+        validate_transport_solution(written)
+
+
+# Reject a file with face state and gradients but no clock. This reports the source artifact.
+def test_file_without_the_clock_datasets_raises(tmp_path: Path) -> None:
+    rho, rho_face = _staggered_grid(5)
+    profile = np.ones((3, 5))
+    face_profile = np.ones((3, 6))
+    written = write_transport_solution(
+        tmp_path / "no_clock.h5", rho=rho, density=profile, temperature=profile, er=np.ones(5),
+        rho_face=rho_face, density_face=face_profile, temperature_face=face_profile, er_face=np.ones(6),
+        r_grid_half=MINOR_RADIUS_M * rho_face,
+        density_grad_face=face_profile, temperature_grad_face=face_profile,
+    )
+    with pytest.raises(ContractError, match="final_time"):
+        validate_transport_solution(written)
+
+
+# A save grid that stops short of final_time means zero-filled trailing slots. The reader's
+# pairing check reaches the validator through the delegation.
+def test_file_with_a_stalled_clock_raises(tmp_path: Path) -> None:
+    import h5py
+
+    rho, rho_face = _staggered_grid(5)
+    profile = np.ones((3, 5))
+    face_profile = np.ones((3, 6))
+    written = write_transport_solution(
+        tmp_path / "stalled.h5", rho=rho, density=profile, temperature=profile, er=np.ones(5),
+        rho_face=rho_face, density_face=face_profile, temperature_face=face_profile, er_face=np.ones(6),
+        r_grid_half=MINOR_RADIUS_M * rho_face,
+        density_grad_face=face_profile, temperature_grad_face=face_profile,
+        final_time=FINAL_TIME_S, next_dt=NEXT_DT_S,
+    )
+    with h5py.File(written, "a") as f:
+        f.create_dataset("ts", data=np.array([FINAL_TIME_S / 2.0]))
+    with pytest.raises(ContractError, match="describe different spans"):
+        validate_transport_solution(written)
+
+
+# Leading axes
 
 # Two arrays can share a rank and still describe different numbers of times or species. Only the trailing axis is
 # a radial coordinate, so everything before it, time and species, must match exactly between the centered and face
@@ -283,7 +348,7 @@ def test_pressure_with_a_different_species_count_flagged(field: str, density_fie
     assert any(field in problem and "leading axes" in problem for problem in _check_transport_solution(data))
 
 
-# --- ts against a static solution ---
+# Static solution timestamps
 
 # A static solution is one slice, so `ts` describes it with exactly one timestamp. The Stage 3/4 loaders and the
 # feedback writer all date such a file from ts[0], so extra entries name times no slice in the file corresponds to.

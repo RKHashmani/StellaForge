@@ -30,6 +30,7 @@ from pathlib import Path
 
 import yaml
 
+from .signal_contract import validate_signal
 from .utils import LOOP_STAGES, resolve_gpu_settings, resolve_pipeline_paths, resolve_rerun_flags
 
 logger = logging.getLogger(__name__)
@@ -244,7 +245,7 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=Path("inputs/quick_run/config.yaml"),
                         help="Pipeline run config (default: inputs/quick_run/config.yaml).")
     parser.add_argument("--max-iters", type=int, default=3,
-                        help="Number of iterations (independent forward passes) to run (default: 3).")
+                        help="Cap on loop iterations; the convergence signal can stop the loop earlier (default: 3).")
     parser.add_argument("--cores", type=int, default=4,
                         help="Cores passed to 'snakemake --cores' (default: 4).")
     parser.add_argument("--gpu-ids", type=str, default=None,
@@ -308,12 +309,13 @@ def main() -> None:
     # Only a frozen stage needs the iteration 1 tree.
     reuse_output_dir = None if all(rerun.values()) else f"{base_out}/loop/iter_1/output"
 
-    # Each iteration is an independent forward pass under '<output_dir>/loop/iter_N/'. The Stage 1 boundary and the
-    # common_input template come from the previous iteration's feedback artifacts; the other inputs are reseeded from
-    # the base each time. From iteration 2, an overrides file switches Stages 3/4 to the prescribed profiles carried by
-    # the seeded common_input. Distinct iter_N trees mean every stage recomputes each iteration instead of reusing a
-    # cache, except for a stage flagged false in loop.rerun, which reads its artifacts from the iter_1 tree from
-    # iteration 2 on. A frozen Stage 1 stays seeded from the base boundary, leaving the evolved boundary unconsumed.
+    # Each iteration has a full forward pass in its own '<output_dir>/loop/iter_N/' tree.
+    # The prior iteration supplies the Stage 1 boundary and the ``common_input`` template.
+    # This template contains prescribed profiles and the advanced transport clock.
+    # Base inputs supply all other files. From iteration 2, an override makes Stages 3 and 4 read
+    # prescribed profiles from ``common_input``. Separate trees force each enabled stage to run
+    # again. A frozen stage reads its artifacts from the iteration 1 tree. A frozen Stage 1 uses the
+    # base boundary, so no later iteration reads the evolved boundary.
     prev_p: dict[str, str] | None = None
     n = 0
     for n in range(1, max_iters + 1):
@@ -339,12 +341,18 @@ def main() -> None:
 
         prev_p = iter_p  # post-processing wrote both feedback artifacts; they seed iteration n+1
         signal = json.loads(_abs(repo_root, iter_p["s5_signal"]).read_text())
-        if signal.get("halt"):
+        validate_signal(signal)
+        status = signal["status"]
+        if status == "halted":
             logger.warning("Iteration %d: Stage 5 signalled a halt (pressure not sustained); "
                            "stopping. Restart from different initial conditions.", n)
             break
-        if signal.get("converged"):
+        if status == "converged":
             logger.info("Converged at iteration %d; stopping.", n)
+            break
+        if status == "horizon":
+            logger.info("Iteration %d reached [transport_solver].t_final, so no transport time is left to "
+                        "advance into; stopping. Raise t_final to keep evolving.", n)
             break
     logger.info("Loop finished after %d iteration(s); records under %s/loop/", n, base_out)
 

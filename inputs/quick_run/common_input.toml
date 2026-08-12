@@ -83,8 +83,6 @@ type = "neumann"
 default = 0.0
 [boundary.temperature.right]
 type = "robin"
-[boundary.temperature.right.value]
-default = 1.0
 [boundary.temperature.right.decay_length]
 default = 0.05
 

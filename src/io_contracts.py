@@ -1,25 +1,15 @@
-"""Reusable validators for the pipeline's inter-stage file and signal contracts.
+"""Validate files that pass between pipeline stages.
 
-Each stage hands its successor a file (HDF5 or NetCDF) or, for the closed loop, a
-small JSON dict. A drift in the fields the next stage reads (a renamed dataset, a
-transposed axis, a dropped variable from a breaking upstream release) otherwise passes
-silently until the pipeline fails far downstream. These validators make each contract
-explicit: they check exactly the subset the next stage consumes, and can later be wired
-into the pipeline as runtime data-checks.
+Each validator checks the fields that the next stage reads. This check detects renamed datasets,
+transposed axes and removed variables before a later stage fails.
 
-Every validator is two layers. A pure inner ``_check_*`` collects all problems into a
-``list[str]`` from in-memory data, with no file access, so it is unit tested directly.
-A thin outer ``validate_*`` lazily imports ``h5py``/``netCDF4``, reads the consumed
-fields, and raises :class:`ContractError` with every problem joined if the list is
-non-empty. Lazy imports keep the module (and the pure checkers) usable without the
-heavy I/O libraries present.
+Each pure ``_check_*`` function checks data in memory and returns all problems. Each outer
+``validate_*`` function reads a file and raises :class:`ContractError` for those problems.
+The outer functions import I/O libraries only when required.
 
-Contracts are built to the reader/writer code, not the spec docs, wherever in-repo code
-defines them. The two NetCDF files are read by upstream stages and also in-repo by the
-Stage 4 radial scan (stages/stage4-turbulence/gkx_radial_scan.py), which reads the
-wout minor-radius scalars and the boozmn bmnc_b/ixm_b/ixn_b coefficients; their subsets
-follow the documented handoff, the mode-number arrays their coefficients are indexed by,
-and those in-repo reads.
+The contracts follow the reader and writer code when repository code defines the interface. The
+Stage 4 scan also reads both NetCDF files. It uses the WOUT radius values and the BOOZMN mode
+coefficients. The validators therefore check those fields and their mode-number arrays.
 """
 
 from __future__ import annotations
@@ -29,15 +19,7 @@ from typing import Any
 
 import numpy as np
 
-
-class ContractError(Exception):
-    """Raised when a file or signal violates its consumed-field contract."""
-
-
-def _raise_if(problems: list[str], subject: str) -> None:
-    """Raise :class:`ContractError` listing every problem, or return if there are none."""
-    if problems:
-        raise ContractError(f"{subject}:\n  " + "\n  ".join(problems))
+from .signal_contract import ContractError, _raise_if
 
 
 def _require(arr: np.ndarray | None, name: str, problems: list[str]) -> bool:
@@ -265,35 +247,30 @@ def _check_transport_state(
 
 
 def _check_transport_solution(data: dict[str, np.ndarray | None]) -> list[str]:
-    """Check the fields read by the Stage 3/4/5 transport-snapshot loaders.
+    """Check the transport fields that the Stage 3, 4 and 5 loaders read.
 
-    NEOPAX solves on a staggered finite-volume grid, and the file carries both halves of it: the
-    evolved state on ``n_rho`` cell centers, and the face state on the ``n_rho + 1`` faces bounding
-    those cells. Both are required.
+    NEOPAX uses a staggered finite-volume grid. The file contains state on ``n_rho`` cell centers
+    and on ``n_rho + 1`` faces. This contract requires both states.
 
-    The consumers split two ways over which half they read. The closed loop's feedback writer and the
-    Stage 3/4 scans under ``--profiles-source transport_h5`` read the face state, because the faces
-    are the grid NEOPAX interpolates a flux file onto; the pressure fit and the convergence signal
-    read only the centered state, so a plain forward pass completes on a center-only file. The
-    contract requires the faces regardless, holding the artifact to what a closed-loop iteration
-    needs. A forward-pass-only mode would need this requirement relaxed.
+    The feedback writer and the Stage 3 and 4 scans read the face state. The pressure fit and the
+    convergence signal read the centered state. A forward pass can use only the centered state,
+    but a closed-loop iteration also requires the face state.
 
-    The Stage 3 loader accepts either ``temperature`` or ``pressure`` and derives the
-    missing one, but the Stage 4 loader hard-requires ``temperature`` with no pressure
-    fallback. The contract therefore requires ``temperature`` (the field that satisfies
-    both readers) and keeps ``pressure`` optional. The face datasets follow the same rule.
+    Stage 3 can derive ``temperature`` from ``pressure``. Stage 4 requires ``temperature``. The
+    contract therefore requires ``temperature`` and keeps ``pressure`` optional on both grids.
 
-    Required: ``rho``, species-resolved ``density`` and ``temperature``, ``Er`` with no species
-    axis, and their face counterparts ``rho_face``, ``density_faces``, ``temperature_faces`` and
-    ``Er_faces``. Optional: ``pressure`` / ``pressure_faces`` and ``ts``.
+    The required centered fields are ``rho``, ``density``, ``temperature`` and ``Er``. The required
+    face fields are ``rho_face``, ``density_faces``, ``temperature_faces`` and ``Er_faces``.
+    ``pressure``, ``pressure_faces`` and ``ts`` are optional.
 
-    Only the trailing axis of a profile is radial, so every other axis is an invariant of the whole
-    file: ``density_faces``, ``pressure`` and ``pressure_faces`` must match their density's leading
-    axes exactly, and ``Er`` / ``Er_faces`` must match it with the species entry dropped.
-    The two radial grids must describe one geometry: ``rho_face`` holds one more point than ``rho``
-    and increases strictly outward, with each ``rho`` entry the midpoint of the two faces bounding
-    it, as NEOPAX builds them. ``ts`` holds one timestamp per slice: the profiles' time axis when
-    time-resolved, exactly one when static.
+    Each profile uses its trailing axis for radius. The other axes must agree across related
+    fields. ``Er`` and ``Er_faces`` omit only the species axis.
+
+    ``rho_face`` has one more point than ``rho`` and increases outward. Each center is the midpoint
+    of its two faces. A time-resolved ``ts`` has one value per slice. A static ``ts`` has one value.
+
+    This function does not check face gradients, ``r_grid_half``, the minor radius or the clock.
+    ``validate_transport_solution`` first calls the shared loader, which checks those values.
     """
     problems: list[str] = []
 
@@ -311,8 +288,7 @@ def _check_transport_solution(data: dict[str, np.ndarray | None]) -> list[str]:
         n_points=n_face,
         problems=problems,
     )
-    # The two states are the same instant seen on two grids, so everything but the trailing radial
-    # axis must agree.
+    # Both grids describe the same instant. All axes except the trailing radial axis must agree.
     if density is not None and density_faces is not None and density.shape[:-1] != density_faces.shape[:-1]:
         problems.append(
             f"'density_faces' leading axes {density_faces.shape[:-1]} != 'density' leading axes "
@@ -327,8 +303,8 @@ def _check_transport_solution(data: dict[str, np.ndarray | None]) -> list[str]:
         elif density is not None and density.ndim == 3 and ts.shape[0] != density.shape[0]:
             problems.append(f"'ts' length {ts.shape[0]} != time axis {density.shape[0]}")
         elif density is not None and density.ndim == 2 and ts.shape[0] != 1:
-            # A static solution is one slice, so it is dated by exactly one timestamp. The Stage 3/4 loaders
-            # and the feedback writer all read ts[0], so a longer ts names times no slice corresponds to.
+            # A static solution has one slice and one timestamp.
+            # A longer ``ts`` names absent slices.
             problems.append(
                 f"'ts' length {ts.shape[0]} != 1 for a single static profile slice"
             )
@@ -340,6 +316,12 @@ def _check_transport_solution(data: dict[str, np.ndarray | None]) -> list[str]:
 def validate_transport_solution(path: Path | str) -> None:
     """Validate a NEOPAX ``transport_solution.h5`` against the transport-loader contract.
 
+    The validator first reads the file with ``common.neopax_profiles.read_transport_solution``,
+    the loader every face-state consumer runs. That read checks the face state, the face
+    gradients, the minor radius and the clock. ``_check_transport_solution`` then checks what the
+    loader does not read, the centered state with its optional pressure and the geometry between
+    the two radial grids.
+
     Parameters
     ----------
     path : Path or str
@@ -349,9 +331,20 @@ def validate_transport_solution(path: Path | str) -> None:
     ------
     ContractError
         If any required dataset is missing or malformed.
+
+    Notes
+    -----
+    ``common.neopax_profiles`` imports only when ``stages/`` is on the import path.
+    ``pytest.ini`` and the Snakefile's container ``PYTHONPATH`` both add it.
     """
     import h5py
 
+    from common.neopax_profiles import read_transport_solution
+
+    try:
+        read_transport_solution(Path(path), time_index=-1)
+    except (KeyError, ValueError, IndexError) as exc:
+        raise ContractError(f"{path} violates the transport_solution.h5 contract: {exc}") from exc
     with h5py.File(path, "r") as f:
         data = {k: (np.asarray(f[k][()]) if k in f else None) for k in _TRANSPORT_FIELDS}
     _raise_if(_check_transport_solution(data), f"{path} violates the transport_solution.h5 contract")
@@ -670,48 +663,3 @@ def validate_boozmn(path: Path | str) -> None:
     with Dataset(path, "r") as ds:
         data = {k: (np.asarray(ds.variables[k][...]) if k in ds.variables else None) for k in _BOOZMN_FIELDS}
     _raise_if(_check_boozmn(data), f"{path} violates the boozmn NetCDF contract")
-
-
-# converge_status.json signal ------------------------------------------------------------
-
-
-def _check_signal(signal: Any) -> list[str]:
-    """Check the closed-loop signal dict read by the loop driver.
-
-    Examples
-    --------
-    >>> _check_signal({"converged": True, "halt": False})
-    []
-    >>> _check_signal({"converged": True})
-    ["missing required key 'halt'"]
-    """
-    if not isinstance(signal, dict):
-        return [f"signal must be a dict, got {type(signal).__name__}"]
-    problems: list[str] = []
-    for key in ("converged", "halt"):
-        if key not in signal:
-            problems.append(f"missing required key '{key}'")
-        elif not isinstance(signal[key], bool):
-            problems.append(f"key '{key}' must be bool, got {type(signal[key]).__name__}")
-    return problems
-
-
-def validate_signal(signal: dict) -> None:
-    """Validate the closed-loop convergence signal ``{"converged", "halt"}``.
-
-    Parameters
-    ----------
-    signal : dict
-        Parsed ``converge_status.json`` payload (a dict, not a file path).
-
-    Raises
-    ------
-    ContractError
-        If a required key is missing or is not a bool.
-
-    Examples
-    --------
-    >>> validate_signal({"converged": True, "halt": False}) is None
-    True
-    """
-    _raise_if(_check_signal(signal), "signal dict violates the converge_status contract")

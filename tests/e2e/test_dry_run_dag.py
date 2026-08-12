@@ -246,15 +246,15 @@ def test_frozen_stages_absent_from_plan(tmp_path: Path) -> None:
     assert reuse["s2_output"] in output, output
 
 
-# A frozen Stage 3 keeps its iteration 1 provenance. The overrides carry no stage3 profiles_source switch, so the only
-# prescribed flag in the plan belongs to the rerunning Stage 4, and no stage3 rule is scheduled at all. The parse-time
-# NEOPAX config copy must also point its neoclassical_file at the reuse tree through an upward-walking relative path,
-# because NEOPAX resolves file references against its own output directory. Absent rerun keys default to true, which
-# this pins by freezing {stage1, stage3} while leaving the other three stages implicit.
+# A frozen Stage 3 keeps its iteration 1 provenance. Its override omits the Stage 3 profile-source
+# switch, and no Stage 3 rule runs. The NEOPAX config must point ``neoclassical_file`` to the reuse
+# tree with a relative path. NEOPAX resolves it from the output directory. Omitted rerun keys
+# default to true. This case freezes Stages 1, 2 and 3. Stage 3 reads the Boozer transform.
+# Therefore, Stage 2 must also remain frozen.
 def test_frozen_stage3_keeps_iter1_provenance(tmp_path: Path) -> None:
     config = yaml.safe_load((REPO_ROOT / "inputs/quick_run/config.yaml").read_text())
     reuse = resolve_pipeline_paths(config, output_dir=f"{tmp_path}/reuse")
-    for key in ("s1_output", "s3_output"):
+    for key in ("s1_output", "s2_output", "s3_output"):
         artifact = Path(reuse[key])
         artifact.parent.mkdir(parents=True, exist_ok=True)
         artifact.write_text("")
@@ -266,6 +266,7 @@ def test_frozen_stage3_keeps_iter1_provenance(tmp_path: Path) -> None:
         "loop:\n"
         "  rerun:\n"
         "    stage1: false\n"
+        "    stage2: false\n"
         "    stage3: false\n"
         f"  reuse_output_dir: {reuse['output_dir']}\n"
     )
@@ -275,8 +276,9 @@ def test_frozen_stage3_keeps_iter1_provenance(tmp_path: Path) -> None:
     output = result.stdout + result.stderr
     assert result.returncode == 0, output
     assert "stage3_prepare" not in output, output
-    # Stage 2 stays rerunnable while its Stage 1 input is frozen, recomputing the Boozer transform from the reuse wout.
-    assert "stage2_boozer" in output, output
+    # Stage 4 still reruns and takes the frozen boozmn from the reuse tree.
+    assert "stage4_prepare" in output, output
+    assert reuse["s2_output"] in output, output
     assert output.count("--profiles-source prescribed") == 1, output
     assert "--profiles-source analytical" not in output, output
     resolved = Path(paths_out["s5_resolved_config"]).read_text()

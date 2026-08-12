@@ -48,6 +48,7 @@ cmd = "sfincs_jax ../inputs/quick_run/sfincs_input.HSX_vacuum_ns201_quickrun --o
 
 [feature.sfincs-jax.tasks.stage-3-sfincs-radial-scan]
 cmd = "python stage3-neoclassical/sfincs_jax_radial_scan.py"
+env = { PYTHONPATH = "$PIXI_PROJECT_ROOT" }
 
 [feature.neo-jax.dependencies]
 neo-jax = ">=1.0.1,<2"
@@ -73,6 +74,7 @@ cmd = "gkx run --config ../inputs/quick_run/HSX_vacuum_ns201_quickrun.toml --out
 
 [feature.gkx.tasks.stage-4-gkx-radial-scan]
 cmd = "python stage4-turbulence/gkx_radial_scan.py"
+env = { PYTHONPATH = "$PIXI_PROJECT_ROOT" }
 
 [feature.neopax.dependencies]
 scipy = ">=1.17.1,<2"
@@ -88,7 +90,7 @@ netcdf4 = ">=1.7.4,<2"
 
 [feature.neopax.pypi-dependencies]
 orthax = ">=0.2.8, <0.3"
-neopax = { git = "https://github.com/uwplasma/NEOPAX.git", rev = "55fa656d9a10db55a4660f66168a7fba939dcd3d" }
+neopax = { git = "https://github.com/uwplasma/NEOPAX.git", rev = "242e488ccc0d96b38db6f042c319be00c4a8b5f3" }
 
 [feature.neopax.tasks.stage-5-neopax]
 cwd = "../inputs/quick_run"

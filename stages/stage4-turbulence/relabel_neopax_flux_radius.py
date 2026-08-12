@@ -43,7 +43,8 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-from netCDF4 import Dataset
+
+from common.neopax_geometry import read_neopax_minor_radius
 
 logger = logging.getLogger(__name__)
 
@@ -54,70 +55,6 @@ CONVENTIONS: tuple[str, ...] = ("boozer_volume",)
 # Relative tolerance for deciding the flux grid already sits on NEOPAX's grid, in which case this
 # script is a no-op. Chosen well below the ~1e-2 mismatch it exists to remove.
 _ALREADY_RELABELLED_RTOL = 1.0e-12
-
-
-def minor_radius_from_volume(volume_p: float, r_major: float) -> float:
-    """Return the minor radius implied by a plasma volume and a major radius.
-
-    Evaluates ``sqrt(volume_p / (2 pi^2 R))``. Passing the Boozer ``R00`` gives NEOPAX's ``a_b``,
-    and passing VMEC's ``Rmajor_p`` gives VMEC's ``Aminor_p``, which is the whole of the difference
-    between the two radii.
-
-    Parameters
-    ----------
-    volume_p : float
-        Plasma volume from the VMEC ``wout`` file, in m^3.
-    r_major : float
-        Major radius, in m.
-
-    Returns
-    -------
-    float
-        The minor radius, in m.
-
-    Raises
-    ------
-    ValueError
-        If either input is non-positive or non-finite.
-    """
-    if not np.isfinite(volume_p) or volume_p <= 0.0:
-        raise ValueError(f"volume_p must be finite and positive, got {volume_p!r}.")
-    if not np.isfinite(r_major) or r_major <= 0.0:
-        raise ValueError(f"r_major must be finite and positive, got {r_major!r}.")
-    return float(np.sqrt(volume_p / (2.0 * np.pi**2 * r_major)))
-
-
-def read_neopax_minor_radius(wout_path: Path, boozer_path: Path) -> float:
-    """Read the equilibrium files and return the ``boozer_volume`` minor radius.
-
-    Parameters
-    ----------
-    wout_path : Path
-        VMEC ``wout_*.nc`` equilibrium file supplying ``volume_p``.
-    boozer_path : Path
-        Boozer ``boozmn_*.nc`` file supplying ``rmnc_b``, whose boundary ``R00`` is what makes this
-        differ from VMEC's own ``Aminor_p``.
-
-    Returns
-    -------
-    float
-        The minor radius to relabel onto, in m.
-
-    Raises
-    ------
-    KeyError
-        If a required variable is absent from either file.
-    """
-    with Dataset(wout_path, mode="r") as vfile:
-        if "volume_p" not in vfile.variables:
-            raise KeyError(f"VMEC file {wout_path} has no 'volume_p' variable.")
-        volume_p = float(vfile.variables["volume_p"][:])
-
-    with Dataset(boozer_path, mode="r") as bfile:
-        if "rmnc_b" not in bfile.variables:
-            raise KeyError(f"Boozer file {boozer_path} has no 'rmnc_b' variable.")
-        r00_boozer = float(bfile.variables["rmnc_b"][:][-1, 0])
-    return minor_radius_from_volume(volume_p, r00_boozer)
 
 
 def neopax_radial_grid(rho: np.ndarray, a_minor: float, *, rho_edge: float = 1.0) -> np.ndarray:

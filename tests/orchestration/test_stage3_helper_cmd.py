@@ -97,6 +97,7 @@ def test_prepare_base_command_with_empty_config() -> None:
         "--common-config {input.common_config} "
         "--sfincs-template {input.config_file} "
         "--wout-path {input.wout} "
+        "--boozer-path {input.boozer} "
         "--output-dir outputs/quick_run/stage3_neoclassical "
         "--backend cpu"
     )

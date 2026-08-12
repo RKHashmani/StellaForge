@@ -96,6 +96,7 @@ def prepare_cmd(
         "--common-config {input.common_config}",
         "--sfincs-template {input.config_file}",
         "--wout-path {input.wout}",
+        "--boozer-path {input.boozer}",
         f"--output-dir {output_dir}",
         f"--backend {device}",
     ]

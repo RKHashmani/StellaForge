@@ -115,7 +115,7 @@ def test_flags_reach_every_iteration(monkeypatch: pytest.MonkeyPatch, tmp_path: 
         forwarded.append(extra_config)
         signal = Path(target)
         signal.parent.mkdir(parents=True, exist_ok=True)
-        signal.write_text(json.dumps({}))  # neither halt nor converged -> keep looping
+        signal.write_text(json.dumps({"status": "continue"}))  # neither halt nor converged -> keep looping
 
     monkeypatch.setattr(ouroboros, "run_forward_pass", fake_run)
     monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path), "--max-iters", "2",
