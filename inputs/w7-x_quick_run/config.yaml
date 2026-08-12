@@ -60,10 +60,10 @@ stage3:
     neopax_result: null
 
     # --- Surface selection ---
-    # Number of rho grid points for profiles_source: analytical (the axis point is
-    # dropped, so for e.g. 51 points scan 50 surfaces). The other profile sources take
-    # their grid from the profile data and ignore this.
-    analytical_n_radii: 51
+    # A null value uses [geometry].n_radial + 1 for the analytical profile grid.
+    # This run uses 10 faces and scans the 9 faces outside the magnetic axis.
+    # Other profile sources use the grid in their profile data.
+    analytical_n_radii: null
     # num_radii: 4            # subsample this many radii inside the rho window
     # rho_min: 0.1            # lower edge of the rho window
     # rho_max: 0.9            # upper edge of the rho window
@@ -94,8 +94,9 @@ stage4:
     neopax_result: null
 
     # --- Surface selection ---
-    # Number of rho grid points for profiles_source: analytical; null falls back to
-    # [geometry].n_radial in common_input.toml (9 points, scanning 8 nonzero surfaces).
+    # A null value uses [geometry].n_radial + 1 for the analytical profile grid.
+    # This run uses 10 faces and scans the 9 faces outside the magnetic axis.
+    # Other profile sources use the grid in their profile data.
     analytical_n_radii: null
     # num_radii: 4            # subsample this many radii inside the rho window
     # rho_min: 0.0            # lower edge of the rho window
