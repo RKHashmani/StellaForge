@@ -88,7 +88,7 @@ netcdf4 = ">=1.7.4,<2"
 
 [feature.neopax.pypi-dependencies]
 orthax = ">=0.2.8, <0.3"
-neopax = { git = "https://github.com/uwplasma/NEOPAX.git", rev = "55fa656d9a10db55a4660f66168a7fba939dcd3d" }
+neopax = { git = "https://github.com/uwplasma/NEOPAX.git", rev = "242e488ccc0d96b38db6f042c319be00c4a8b5f3" }
 
 [feature.neopax.tasks.stage-5-neopax]
 cwd = "../inputs/quick_run"
