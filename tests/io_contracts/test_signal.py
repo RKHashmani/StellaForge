@@ -1,45 +1,39 @@
-"""Tests for the closed-loop signal contract in ``src/io_contracts.py``.
+"""Test the closed-loop signal contract.
 
-The signal is a parsed ``converge_status.json`` dict, so the validator has no file
-layer: ``validate_signal`` is the pure checker plus the raise. Invalid cases are
-exercised on the checker directly; the raise path and all-problems reporting are shown
-through the public ``validate_signal``.
+The validator accepts a parsed ``converge_status.json`` dictionary. It has no file layer. Tests call
+the checker directly and use ``validate_signal`` to check the public raise path.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from src.io_contracts import ContractError, _check_signal, validate_signal
+from src.signal_contract import LOOP_STATUSES, ContractError, _check_signal, validate_signal
 
 
-def test_valid_signal_passes() -> None:
-    assert validate_signal({"converged": True, "halt": False}) is None
+@pytest.mark.parametrize("status", LOOP_STATUSES)
+def test_every_declared_status_passes(status: str) -> None:
+    assert validate_signal({"status": status}) is None
 
 
-# Gives `converged` the integer 1 instead of a real bool and asserts the inner checker returns exactly the "must be
-# bool, got int" problem. Checking the full returned list (with ==) pins both the wording and that no other spurious
-# problems appear.
-def test_check_signal_wrong_type() -> None:
-    assert _check_signal({"converged": 1, "halt": False}) == ["key 'converged' must be bool, got int"]
+# The driver has no branch for an unknown status. Without validation, it would keep the loop
+# running. The exact list also checks the message and excludes extra problems.
+def test_check_signal_unknown_status() -> None:
+    assert _check_signal({"status": "done"}) == [
+        "key 'status' must be one of continue, converged, horizon, halted, got 'done'"
+    ]
 
 
-# Passes a list instead of a dict and asserts the checker returns the single "signal must be a dict" problem, confirming
-# it rejects the wrong top-level type before checking any keys.
+# An older signal can contain only convergence and halt booleans. It has no status and must fail.
+def test_check_signal_rejects_the_two_boolean_shape() -> None:
+    assert _check_signal({"converged": True, "halt": False}) == ["missing required key 'status'"]
+
+
+# A list has the wrong top-level type. The checker rejects it before checking keys.
 def test_check_signal_not_a_dict() -> None:
-    assert _check_signal(["converged", "halt"]) == ["signal must be a dict, got list"]
+    assert _check_signal(["status"]) == ["signal must be a dict, got list"]
 
 
 def test_validate_signal_raises_on_missing_key() -> None:
-    with pytest.raises(ContractError, match="halt"):
-        validate_signal({"converged": True})
-
-
-# Passes an empty dict (both required keys missing) and asserts the raised error message mentions both `converged` and
-# `halt`. This proves the validator reports every problem at once rather than stopping at the first one. `exc.value` is
-# the captured exception object.
-def test_validate_signal_reports_all_problems() -> None:
-    with pytest.raises(ContractError) as exc:
+    with pytest.raises(ContractError, match="status"):
         validate_signal({})
-    message = str(exc.value)
-    assert "converged" in message and "halt" in message

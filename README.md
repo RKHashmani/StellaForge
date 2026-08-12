@@ -117,7 +117,7 @@ Snakemake DAG, end-to-end tests, and publishing. Details in the [Guide](docs/gui
 
 A *run* is a folder under `inputs/` holding its run config (`config.yaml`) and every stage input. A fresh clone ships one ready-to-run example, `inputs/quick_run/`. Two W7-X cases are committed beside it, `inputs/w7-x_quick_run/` at that same smoke resolution and `inputs/w7-x_t3d_validation/` at the resolution the Trinity3D validation uses. `common_input.toml` in the run folder is the shared transport config read by Stages 3, 4, and 5.
 
-`driftless-star` iterates toward transport-consistent profiles, sequencing independent forward passes and feeding each pass's Stage 5 transport solution into the next one as a boundary refit from the evolved pressure and as kinetic profiles prescribed to Stages 3, 4, and 5:
+`driftless-star` iterates toward transport-consistent profiles by chaining forward passes. Each pass's Stage 5 transport solution feeds the next one three ways: as a boundary refit from the evolved pressure, as kinetic profiles prescribed to Stages 3, 4, and 5, and as the advanced transport clock.
 
 ```
 pixi run driftless-star --config inputs/quick_run/config.yaml --max-iters 3 --cores 4

@@ -30,12 +30,21 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import h5py
 import numpy as np
+from common.neopax_geometry import read_neopax_minor_radius
+from common.neopax_profiles import (
+    NEOPAX_DENSITY_REFERENCE_M3,
+    NEOPAX_TEMPERATURE_REFERENCE_EV,
+    FaceState,
+    SpeciesMeta,
+    build_analytical_face_state,
+    build_prescribed_face_state,
+    read_transport_face_state,
+)
 from netCDF4 import Dataset
 from scipy.constants import elementary_charge, proton_mass
 
@@ -60,29 +69,6 @@ FD_CHANNEL_DIR_SUFFIX: dict[str, str] = {
     "density_gradient": "fd_n",
     "temperature_gradient": "fd_t",
 }
-
-# Face-grid datasets required of a NEOPAX transport_solution.h5, alongside its cell-centered state.
-_TRANSPORT_FACE_DATASETS = ("rho_face", "density_faces", "temperature_faces", "Er_faces")
-
-NEOPAX_DENSITY_REFERENCE_M3 = 1.0e20
-NEOPAX_TEMPERATURE_REFERENCE_EV = 1.0e3
-
-
-@dataclass(frozen=True)
-class SpeciesMeta:
-    name: str
-    charge: float
-    mass_mp: float
-
-
-@dataclass(frozen=True)
-class ProfileSnapshot:
-    rho: np.ndarray
-    density: np.ndarray  # shape (ns, nr)
-    temperature: np.ndarray  # shape (ns, nr)
-    er: np.ndarray  # shape (nr,)
-    time_value: float | None
-
 
 def _toml_scalar(value: Any) -> str:
     if isinstance(value, bool):
@@ -272,6 +258,34 @@ def _infer_neopax_root(config_path: Path) -> Path:
     return parent
 
 
+def _resolve_equilibrium_paths(common_config: Path, args: argparse.Namespace) -> tuple[str | None, str | None]:
+    """Resolve the VMEC and Boozer file paths.
+
+    Command-line overrides have priority. The NEOPAX config supplies each fallback.
+
+    Parameters
+    ----------
+    common_config : Path
+        NEOPAX common input whose [geometry] block names both files.
+    args : argparse.Namespace
+        Parsed arguments, read for ``vmec_file_override`` and ``boozer_file_override``.
+
+    Returns
+    -------
+    tuple of (str or None, str or None)
+        ``(vmec_path, boozer_path)`` as absolute paths. An entry is None if neither source names it.
+    """
+    neopax_root = _infer_neopax_root(common_config)
+    geometry_cfg = _load_toml(common_config).get("geometry", {})
+    vmec_path = _resolve_cli_path(args.vmec_file_override)
+    if vmec_path is None:
+        vmec_path = _resolve_relative(neopax_root, geometry_cfg.get("vmec_file"))
+    booz_path = _resolve_cli_path(args.boozer_file_override)
+    if booz_path is None:
+        booz_path = _resolve_relative(neopax_root, geometry_cfg.get("boozer_file"))
+    return vmec_path, booz_path
+
+
 def _coalesce(value: Any, template_value: Any, fallback: Any) -> Any:
     if value is not None:
         return value
@@ -360,352 +374,40 @@ def _warn_unmatched_perturb_species(
         )
 
 
-def _infer_transport_snapshot(h5_path: Path, *, time_index: int) -> ProfileSnapshot:
-    """Read one time slice of a NEOPAX ``transport_solution.h5`` on its **face** grid.
+def load_neopax_snapshot(h5_path: Path, *, time_index: int) -> FaceState:
+    """Read a face state from NEOPAX transport_solution.h5.
 
-    NEOPAX evolves its state on the ``n_radial`` cell centers and writes those as ``rho`` /
-    ``density`` / ``temperature`` / ``Er``, but the centers span neither ``rho = 0`` nor
-    ``rho = rho_edge``. A scan built from them would write a flux file stopping short at both ends,
-    where NEOPAX's own interpolation returns NaN. The ``n_radial + 1`` faces are the grid it
-    interpolates a flux file onto, so this reads the ``*_faces`` datasets instead, the same face
-    state the closed loop's prescribed block carries.
-
-    Raises
-    ------
-    KeyError
-        If the face datasets are absent, as in a solution from a NEOPAX predating the staggered
-        grid. Falling back to the centers would silently sample the wrong radii.
-    IndexError
-        If ``time_index`` falls outside the file's time axis.
-    """
-    with h5py.File(h5_path, "r") as f:
-        keys = set(f.keys())
-        if not {"rho", "density", "temperature", "Er"}.issubset(keys):
-            raise KeyError("This HDF5 file does not look like a NEOPAX transport_solution.h5 output")
-        missing = [name for name in _TRANSPORT_FACE_DATASETS if name not in keys]
-        if missing:
-            raise KeyError(
-                f"{h5_path} is missing the transport face datasets: {', '.join(missing)}. They are written "
-                "only by NEOPAX revisions that solve on the staggered cell/face grid, and the cell-centered "
-                "datasets cannot stand in: they span neither rho = 0 nor rho = rho_edge, so a flux file built "
-                "from them leaves both ends of NEOPAX's own grid outside its knots."
-            )
-        rho = np.asarray(f["rho_face"][()], dtype=float)
-        density_all = np.asarray(f["density_faces"][()], dtype=float)
-        temperature_all = np.asarray(f["temperature_faces"][()], dtype=float)
-        er_all = np.asarray(f["Er_faces"][()], dtype=float)
-        ts = np.asarray(f["ts"][()], dtype=float) if "ts" in keys else None
-
-    # A static solution is (n_species, n_faces) and a time-resolved one (n_time, n_species, n_faces),
-    # so the leading axis means different things. Indexing a static file as if it were time-resolved
-    # would silently return a single species row and a scalar Er.
-    if density_all.ndim == 2:
-        if int(time_index) != -1:
-            raise ValueError(
-                f"{h5_path} stores a single static profile slice with no time axis, so --time-index "
-                f"{time_index} cannot be selected"
-            )
-        idx = 0
-        density, temperature, er = density_all, temperature_all, er_all
-    else:
-        idx = time_index if time_index >= 0 else density_all.shape[0] + time_index
-        if idx < 0 or idx >= density_all.shape[0]:
-            raise IndexError(f"time index {time_index} out of range for {h5_path}")
-        density = np.asarray(density_all[idx], dtype=float)
-        temperature = np.asarray(temperature_all[idx], dtype=float)
-        er = np.asarray(er_all[idx], dtype=float)
-
-    return ProfileSnapshot(
-        rho=rho,
-        density=density,
-        temperature=temperature,
-        er=er,
-        time_value=None if ts is None else float(ts[idx]),
-    )
-
-
-def _match_species_factors(raw: Any, n_species: int, *, default: float) -> np.ndarray:
-    if raw is None:
-        return np.full((n_species,), float(default), dtype=np.float64)
-    if isinstance(raw, (int, float)):
-        return np.full((n_species,), float(raw), dtype=np.float64)
-    arr = np.asarray(list(raw), dtype=np.float64)
-    if arr.size == 1:
-        return np.full((n_species,), float(arr[0]), dtype=np.float64)
-    if arr.size != n_species:
-        raise ValueError(f"Expected {n_species} profile factors, got {arr.size}")
-    return arr
-
-
-def _build_standard_analytical_snapshot(
-    cfg: dict[str, Any],
-    *,
-    n_species: int,
-    n_points: int,
-) -> ProfileSnapshot:
-    """Evaluate the analytical profile model on ``n_points`` radii spanning ``[0, rho_edge]``.
-
-    ``n_points`` is a literal sample count, not a cell count. NEOPAX's cell count ``n_radial``
-    describes ``n_radial + 1`` faces, so a caller wanting the scan to land exactly on the transport
-    face grid passes ``n_radial + 1`` rather than ``n_radial``; see ``cmd_prepare``.
-    """
-    profile_cfg = cfg.get("profiles", {})
-    rho_edge = float(cfg.get("geometry", {}).get("rho_edge", 1.0))
-    rho = np.linspace(0.0, rho_edge, int(n_points), dtype=np.float64)
-    x = rho / max(float(rho[-1]) if rho.size else 1.0, 1.0e-30)
-
-    n0 = _match_species_factors(profile_cfg.get("n0", profile_cfg.get("ni0", profile_cfg.get("ne0", 4.21))), n_species, default=4.21)
-    n_edge = _match_species_factors(profile_cfg.get("n_edge", profile_cfg.get("nib", profile_cfg.get("neb", 0.6))), n_species, default=0.6)
-    t0 = _match_species_factors(profile_cfg.get("T0", profile_cfg.get("ti0", profile_cfg.get("te0", 17.8))), n_species, default=17.8)
-    t_edge = _match_species_factors(profile_cfg.get("T_edge", profile_cfg.get("tib", profile_cfg.get("teb", 0.7))), n_species, default=0.7)
-    density_shape_power = _match_species_factors(profile_cfg.get("density_shape_power", 2.0), n_species, default=2.0)
-    density_shape_alpha = _match_species_factors(profile_cfg.get("density_shape_alpha", 1.0), n_species, default=1.0)
-    temperature_shape_power = _match_species_factors(profile_cfg.get("temperature_shape_power", 2.0), n_species, default=2.0)
-    temperature_shape_alpha = _match_species_factors(profile_cfg.get("temperature_shape_alpha", 1.0), n_species, default=1.0)
-
-    c_density = profile_cfg.get("c_density")
-    if c_density is None and n_species == 3:
-        deuterium_ratio = float(profile_cfg.get("deuterium_ratio", 0.5))
-        tritium_ratio = float(profile_cfg.get("tritium_ratio", 0.5))
-        c_density = [1.0, deuterium_ratio, tritium_ratio]
-
-    density_species_scale = _match_species_factors(c_density, n_species, default=1.0)
-    temperature_species_scale = _match_species_factors(profile_cfg.get("c_temperature"), n_species, default=1.0)
-    density_global_scale = _match_species_factors(profile_cfg.get("n_scale", 1.0), n_species, default=1.0)
-    temperature_global_scale = _match_species_factors(profile_cfg.get("T_scale", 1.0), n_species, default=1.0)
-
-    density = np.zeros((n_species, rho.size), dtype=np.float64)
-    temperature = np.zeros((n_species, rho.size), dtype=np.float64)
-    for i in range(n_species):
-        density_shape = (1.0 - x**density_shape_power[i]) ** density_shape_alpha[i]
-        temperature_shape = (1.0 - x**temperature_shape_power[i]) ** temperature_shape_alpha[i]
-        density_base = n_edge[i] + (n0[i] - n_edge[i]) * density_shape
-        temperature_base = t_edge[i] + (t0[i] - t_edge[i]) * temperature_shape
-        density[i, :] = density_species_scale[i] * density_global_scale[i] * density_base
-        temperature[i, :] = temperature_species_scale[i] * temperature_global_scale[i] * temperature_base
-
-    er0_scale = float(profile_cfg.get("er0_scale", 100.0))
-    er0_peak_rho = float(profile_cfg.get("er0_peak_rho", 0.8))
-    er = er0_scale * x * (er0_peak_rho - x)
-
-    return ProfileSnapshot(
-        rho=np.asarray(rho, dtype=np.float64),
-        density=np.asarray(density, dtype=np.float64),
-        temperature=np.asarray(temperature, dtype=np.float64),
-        er=np.asarray(er, dtype=np.float64),
-        time_value=None,
-    )
-
-
-def _require_profile_array(profile_cfg: dict[str, Any], key: str, *, ndim: int) -> np.ndarray:
-    """Read a required ``[profiles]`` array as float64 and check its dimensionality."""
-    if key not in profile_cfg:
-        raise ValueError(f"[profiles].{key} is required when --profiles-source=prescribed")
-    array = np.asarray(profile_cfg[key], dtype=np.float64)
-    if array.ndim != ndim:
-        raise ValueError(f"[profiles].{key} must be {ndim}-D, got shape {array.shape}")
-    return array
-
-
-def _require_face_arrays(
-    profile_cfg: dict[str, Any], *, n_species: int, n_radial: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Read and shape-check the ``[profiles]`` face arrays against ``n_radial`` cells.
+    The dataset names identify the layout before parsing. A parse failure does not identify the file
+    format. A file without face datasets can still have the NEOPAX solution layout.
+    In that case, the shared reader identifies the missing datasets.
 
     Parameters
     ----------
-    profile_cfg : dict[str, Any]
-        The parsed ``[profiles]`` section.
-    n_species : int
-        Number of species the run expects.
-    n_radial : int
-        Number of transport cells, so the arrays must carry ``n_radial + 1`` radial entries.
+    h5_path : Path
+        Transport solution to read.
+    time_index : int
+        Time slice to take, counting back from the last when negative.
 
     Returns
     -------
-    tuple of numpy.ndarray
-        ``(density_face, temperature_face, er_face)`` in the block's SI units.
+    FaceState
+        Face state and face gradients on the transport face grid.
 
     Raises
     ------
     ValueError
-        If an array is absent or does not span the ``n_radial + 1`` cell faces.
-    """
-    n_faces = n_radial + 1
-    density_face = _require_profile_array(profile_cfg, "density_face", ndim=2)
-    temperature_face = _require_profile_array(profile_cfg, "temperature_face", ndim=2)
-    er_face = _require_profile_array(profile_cfg, "Er_face", ndim=1)
-    for key, array in (("density_face", density_face), ("temperature_face", temperature_face)):
-        if array.shape != (n_species, n_faces):
-            raise ValueError(
-                f"[profiles].{key} has shape {array.shape}, expected {(n_species, n_faces)}: one row per "
-                f"species and one column per cell face, which is [geometry].n_radial + 1"
-            )
-    if er_face.size != n_faces:
-        raise ValueError(
-            f"[profiles].Er_face holds {er_face.size} points, expected {n_faces} to span the same cell "
-            "faces as [profiles].density_face"
-        )
-    return density_face, temperature_face, er_face
-
-
-def _build_prescribed_snapshot(cfg: dict[str, Any], *, n_species: int) -> ProfileSnapshot:
-    """Build a snapshot from the prescribed profile arrays stored in the config ``[profiles]`` section.
-
-    The block carries both of NEOPAX's radial grids. ``density`` / ``temperature`` / ``Er`` hold one
-    value per **cell center** and are what NEOPAX itself reads back, so they are validated here but
-    not used. ``density_face`` / ``temperature_face`` / ``Er_face`` hold one value per **cell face**,
-    and the snapshot is built from those: the scan samples fluxes on the faces because that is the
-    grid NEOPAX interpolates a flux file onto.
-
-    The face values are never reconstructed from the centered ones. NEOPAX builds them under the
-    run's own boundary models, so a block missing them is rejected rather than extrapolated -- an
-    extrapolation invented here would disagree with the solver wherever the outer boundary is not a
-    plain Dirichlet, which is exactly the case for the Robin temperature edge the quick run uses.
-
-    The prescribed arrays are SI (density m^-3, temperature eV), so both are divided by the
-    NEOPAX reference values to reach the snapshot units of 1e20 m^-3 and keV. Er is kV/m in
-    both and passes through unchanged. The arrays carry no radial coordinate, so the grid is
-    rebuilt from the same ``[geometry]`` block the transport solver builds its own grid from.
-
-    Parameters
-    ----------
-    cfg : dict[str, Any]
-        Parsed common-input TOML.
-    n_species : int
-        Number of species the run expects, taken from ``[species].names``.
-
-    Returns
-    -------
-    ProfileSnapshot
-        Face profiles on the reconstructed face grid, in snapshot units.
-
-    Raises
-    ------
-    ValueError
-        If ``[profiles].model`` is not ``prescribed``, an array is missing, or the centered and
-        face arrays disagree with each other or with ``[geometry].n_radial``.
-    """
-    profile_cfg = cfg.get("profiles", {})
-    model = str(profile_cfg.get("model", "")).strip().lower()
-    if model != "prescribed":
-        raise ValueError(f"[profiles].model is {model!r}; --profiles-source=prescribed requires 'prescribed'")
-    density = _require_profile_array(profile_cfg, "density", ndim=2)
-    temperature = _require_profile_array(profile_cfg, "temperature", ndim=2)
-    er = _require_profile_array(profile_cfg, "Er", ndim=1)
-    if temperature.shape != density.shape:
-        raise ValueError(
-            f"[profiles].temperature has shape {temperature.shape}, expected the [profiles].density "
-            f"shape {density.shape}"
-        )
-    if density.shape[0] != n_species:
-        raise ValueError(
-            f"[profiles].density holds {density.shape[0]} species rows, expected {n_species} to match "
-            "the number of entries in [species].names"
-        )
-    n_radial = int(density.shape[1])
-    if er.size != n_radial:
-        raise ValueError(f"[profiles].Er holds {er.size} points, expected {n_radial} to match [profiles].density")
-    geometry_cfg = cfg.get("geometry", {})
-    if "n_radial" not in geometry_cfg:
-        raise ValueError("[geometry].n_radial is required when --profiles-source=prescribed")
-    if n_radial != int(geometry_cfg["n_radial"]):
-        raise ValueError(
-            f"[profiles] arrays hold {n_radial} radial points, expected {int(geometry_cfg['n_radial'])} "
-            "to match [geometry].n_radial"
-        )
-    # The gradients are taken on the faces, so the floor is a face count: three faces for np.gradient's
-    # edge_order=2. That is two cells, which also clears NEOPAX's own two-cell minimum for extrapolating
-    # its outer boundary value from the cell-centered arrays this same block carries.
-    if n_radial + 1 < 3:
-        raise ValueError(
-            f"[profiles] arrays hold {n_radial} cells, giving {n_radial + 1} faces; the radial gradients "
-            "need at least 3 faces"
-        )
-
-    density_face, temperature_face, er_face = _require_face_arrays(
-        profile_cfg, n_species=n_species, n_radial=n_radial
-    )
-    rho_edge = float(geometry_cfg.get("rho_edge", 1.0))
-    return ProfileSnapshot(
-        rho=np.linspace(0.0, rho_edge, n_radial + 1, dtype=np.float64),
-        density=density_face / NEOPAX_DENSITY_REFERENCE_M3,
-        temperature=temperature_face / NEOPAX_TEMPERATURE_REFERENCE_EV,
-        er=er_face,
-        time_value=None,
-    )
-
-
-def _infer_ntss_snapshot(h5_path: Path, species: list[SpeciesMeta]) -> ProfileSnapshot:
-    density_map = {
-        "e": "ne",
-        "electron": "ne",
-        "electrons": "ne",
-        "d": "nD",
-        "deuterium": "nD",
-        "t": "nT",
-        "tritium": "nT",
-        "he": "nHe",
-        "helium": "nHe",
-    }
-    temperature_map = {
-        "e": "Te",
-        "electron": "Te",
-        "electrons": "Te",
-        "d": "TD",
-        "deuterium": "TD",
-        "t": "TT",
-        "tritium": "TT",
-        "he": "THe",
-        "helium": "THe",
-    }
-    with h5py.File(h5_path, "r") as f:
-        if "r" not in f or "Er" not in f:
-            raise KeyError("Flat NTSS-like file must at least contain datasets r and Er")
-        rho = np.asarray(f["r"][()], dtype=float)
-        er = np.asarray(f["Er"][()], dtype=float)
-        density = np.zeros((len(species), rho.size), dtype=float)
-        temperature = np.zeros((len(species), rho.size), dtype=float)
-        for i, sp in enumerate(species):
-            key = _canonical_species_key(sp.name)
-            dset_n = density_map.get(key)
-            dset_t = temperature_map.get(key)
-            if dset_n is None or dset_t is None:
-                raise KeyError(f"Do not know how to map species {sp.name!r} into NTSS flat-file datasets")
-            if dset_n not in f or dset_t not in f:
-                raise KeyError(f"Missing datasets {dset_n!r} / {dset_t!r} in {h5_path}")
-            density[i] = np.asarray(f[dset_n][()], dtype=float)
-            temperature[i] = np.asarray(f[dset_t][()], dtype=float)
-    return ProfileSnapshot(rho=rho, density=density, temperature=temperature, er=er, time_value=None)
-
-
-def load_neopax_snapshot(h5_path: Path, species: list[SpeciesMeta], *, time_index: int) -> ProfileSnapshot:
-    """Read a profile snapshot from either file layout this stage accepts.
-
-    The layout is chosen from the file's datasets *before* parsing, rather than by trying the NEOPAX
-    reader and treating any failure as "not that format". A NEOPAX solution that merely lacks the
-    face datasets is still recognisably a NEOPAX solution, and its own diagnostic naming the missing
-    datasets is the useful one; falling through to the NTSS parser would instead report that the file
-    has no ``r`` or ``Er``, which is true but says nothing about the real cause.
+        If the file is not a transport solution. A flat radius list carries no face grid and no
+        boundary models, so NEOPAX's face gradients cannot be derived from one.
     """
     with h5py.File(h5_path, "r") as f:
         is_transport_solution = {"rho", "density", "Er"}.issubset(f.keys())
-    if is_transport_solution:
-        return _infer_transport_snapshot(h5_path, time_index=time_index)
-    return _infer_ntss_snapshot(h5_path, species)
-
-
-def _safe_log_gradient(values: np.ndarray, rho: np.ndarray, *, floor: float) -> np.ndarray:
-    arr = np.maximum(np.asarray(values, dtype=float), float(floor))
-    logr = np.log(arr)
-    return -np.gradient(logr, np.asarray(rho, dtype=float), edge_order=2)
-
-
-def _safe_log_gradient_torflux(values: np.ndarray, rho: np.ndarray, *, floor: float) -> np.ndarray:
-    arr = np.maximum(np.asarray(values, dtype=float), float(floor))
-    logr = np.log(arr)
-    torflux = np.asarray(rho, dtype=float) ** 2
-    return -np.gradient(logr, torflux, edge_order=2)
+    if not is_transport_solution:
+        raise ValueError(
+            f"{h5_path} is not a NEOPAX transport_solution.h5. Every run needs the face gradients "
+            "NEOPAX builds from its cell-centered state under the run's boundary models, and only "
+            "that layout carries them."
+        )
+    return read_transport_face_state(h5_path, time_index=time_index)
 
 
 def _infer_vmec_minor_radius(vmec_path: str) -> float:
@@ -818,7 +520,7 @@ def _build_manifest(
     neopax_result: Path,
     common_config: Path,
     output_dir: Path,
-    snapshot: ProfileSnapshot,
+    snapshot: FaceState,
     species: list[SpeciesMeta],
     electron_model: str,
     reference_ion: str | None,
@@ -829,6 +531,8 @@ def _build_manifest(
     density = np.asarray(snapshot.density, dtype=float)
     temperature = np.asarray(snapshot.temperature, dtype=float)
     er = np.asarray(snapshot.er, dtype=float)
+    density_grad = np.asarray(snapshot.density_grad, dtype=float)
+    temperature_grad = np.asarray(snapshot.temperature_grad, dtype=float)
     if density.shape[0] != len(species) or temperature.shape[0] != len(species):
         raise ValueError("NEOPAX HDF5 species dimension does not match the species list from the TOML")
 
@@ -861,59 +565,16 @@ def _build_manifest(
         if dkap_temperature is None:
             dkap_temperature = DEFAULT_FD_DKAP_TEMPERATURE
 
-    gradient_coordinate = str(args.gradient_coordinate).strip().lower()
-    gradient_scale = float(args.gradient_scale)
-    if gradient_coordinate not in {"rho", "torflux", "rho_with_scale"}:
-        raise ValueError("--gradient-coordinate must be one of: rho, torflux, rho_with_scale")
-
-    if gradient_coordinate == "rho":
-        density_grad = np.vstack([
-            _safe_log_gradient(density[i], rho, floor=float(args.density_floor))
-            for i in range(density.shape[0])
-        ])
-        temperature_grad = np.vstack([
-            _safe_log_gradient(temperature[i], rho, floor=float(args.temperature_floor))
-            for i in range(temperature.shape[0])
-        ])
-    elif gradient_coordinate == "torflux":
-        density_grad = np.vstack([
-            _safe_log_gradient_torflux(density[i], rho, floor=float(args.density_floor))
-            for i in range(density.shape[0])
-        ])
-        temperature_grad = np.vstack([
-            _safe_log_gradient_torflux(temperature[i], rho, floor=float(args.temperature_floor))
-            for i in range(temperature.shape[0])
-        ])
-    else:
-        density_grad = gradient_scale * np.vstack([
-            _safe_log_gradient(density[i], rho, floor=float(args.density_floor))
-            for i in range(density.shape[0])
-        ])
-        temperature_grad = gradient_scale * np.vstack([
-            _safe_log_gradient(temperature[i], rho, floor=float(args.temperature_floor))
-            for i in range(temperature.shape[0])
-        ])
-
     ref_idx = _select_reference_ion_index(species, preferred_name=reference_ion)
     ref_species = species[ref_idx]
     ref_density = np.maximum(density[ref_idx], float(args.density_floor))
     ref_temperature = np.maximum(temperature[ref_idx], float(args.temperature_floor))
+    density_denominator = np.maximum(density, float(args.density_floor))
+    temperature_denominator = np.maximum(temperature, float(args.temperature_floor))
 
-    neopax_root = _infer_neopax_root(common_config)
-
-    vmec_path = _resolve_cli_path(args.vmec_file_override)
-    if vmec_path is None:
-        cfg = _load_toml(common_config)
-        geometry_cfg = cfg.get("geometry", {})
-        vmec_path = _resolve_relative(neopax_root, geometry_cfg.get("vmec_file"))
+    vmec_path, booz_path = _resolve_equilibrium_paths(common_config, args)
     if vmec_path is None:
         raise ValueError("Could not resolve a VMEC file path from the NEOPAX config")
-
-    booz_path = _resolve_cli_path(args.boozer_file_override)
-    if booz_path is None:
-        cfg = _load_toml(common_config)
-        geometry_cfg = cfg.get("geometry", {})
-        booz_path = _resolve_relative(neopax_root, geometry_cfg.get("boozer_file"))
     a_minor = _infer_vmec_minor_radius(vmec_path)
 
     electron_idx = None
@@ -1007,8 +668,13 @@ def _build_manifest(
                     "mass": float(sp.mass_mp),
                     "density": float(density[sp_idx, rho_idx] / ref_n),
                     "temperature": float(temperature[sp_idx, rho_idx] / ref_t),
-                    "tprim": float(args.tprim_scale * temperature_grad[sp_idx, rho_idx]),
-                    "fprim": float(args.fprim_scale * density_grad[sp_idx, rho_idx]),
+                    "tprim": float(
+                        args.tprim_scale
+                        * (-temperature_grad[sp_idx, rho_idx] / temperature_denominator[sp_idx, rho_idx])
+                    ),
+                    "fprim": float(
+                        args.fprim_scale * (-density_grad[sp_idx, rho_idx] / density_denominator[sp_idx, rho_idx])
+                    ),
                     "nu": float(args.nu_electron if is_electron else args.nu_ion),
                     "density_physical": float(density[sp_idx, rho_idx]),
                     "temperature_physical": float(temperature[sp_idx, rho_idx]),
@@ -1188,7 +854,10 @@ def _build_manifest(
             "reference_species_index": int(ref_idx),
             "density_normalization": "n_s / n_ref_ion(rho)",
             "temperature_normalization": "T_s / T_ref_ion(rho)",
-            "gradient_definition": "tprim/fprim are computed from physical profiles before normalization.",
+            "gradient_definition": (
+                "tprim/fprim come from NEOPAX's own face gradients d(T)/d(rho) and d(n)/d(rho), per unit rho; "
+                "tprim = -(dT/drho) / T_face and fprim = -(dn/drho) / n_face at the same face."
+            ),
         },
         "terms": {
             "streaming": float(_coalesce(None, template_terms.get("streaming"), 1.0)),
@@ -1213,10 +882,6 @@ def _build_manifest(
             "resolved_diagnostics": bool(
                 _coalesce(args.resolved_diagnostics, template_output.get("resolved_diagnostics"), True)
             ),
-        },
-        "gradient_mapping": {
-            "coordinate": gradient_coordinate,
-            "scale": gradient_scale,
         },
         "init": {
             "init_field": str(_coalesce(args.init_field, template_init.get("init_field"), "density")),
@@ -1275,8 +940,6 @@ def _write_runs_csv(path: Path, manifest: dict[str, Any]) -> None:
 def _build_normalization_audit_rows(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     electron_model = str(manifest["electron_model"])
-    gradient_coordinate = str(manifest.get("gradient_mapping", {}).get("coordinate", "rho"))
-    gradient_scale = float(manifest.get("gradient_mapping", {}).get("scale", 1.0))
     normalization = manifest.get("normalization", {})
     ref_species_name = str(normalization.get("reference_species_name", ""))
     ref_species_index = int(normalization.get("reference_species_index", -1))
@@ -1285,14 +948,8 @@ def _build_normalization_audit_rows(manifest: dict[str, Any]) -> list[dict[str, 
         torflux = float(run["torflux"])
         tau_e = run["tau_e"]
         for sp in run["runtime_species"]:
-            grad_rho = float(sp["tprim"])
-            dens_grad_rho = float(sp["fprim"])
-            if abs(rho) > 1.0e-12:
-                grad_torflux = grad_rho / (2.0 * rho)
-                dens_grad_torflux = dens_grad_rho / (2.0 * rho)
-            else:
-                grad_torflux = math.nan
-                dens_grad_torflux = math.nan
+            tprim = float(sp["tprim"])
+            fprim = float(sp["fprim"])
             rows.append(
                 {
                     "run_index": int(run["index"]),
@@ -1311,12 +968,8 @@ def _build_normalization_audit_rows(manifest: dict[str, Any]) -> list[dict[str, 
                     "reference_temperature_physical": float(sp["temperature_reference_physical"]),
                     "density_normalized_to_ref_ion": float(sp["density"]),
                     "temperature_normalized_to_ref_ion": float(sp["temperature"]),
-                    "gradient_coordinate": gradient_coordinate,
-                    "gradient_scale": gradient_scale,
-                    "fprim_used": dens_grad_rho,
-                    "tprim_used": grad_rho,
-                    "fprim_if_interpreted_per_torflux": dens_grad_torflux,
-                    "tprim_if_interpreted_per_torflux": grad_torflux,
+                    "fprim_used": fprim,
+                    "tprim_used": tprim,
                     "tau_e_used": math.nan if tau_e is None else float(tau_e),
                     "Er_input": float(run["Er"]),
                 }
@@ -1337,14 +990,11 @@ def _write_normalization_audit(output_dir: Path, manifest: dict[str, Any]) -> No
     payload = {
         "assumptions": {
             "reference_species_normalization": "All runtime densities and temperatures are normalized to the chosen reference ion at the same radius.",
-            "gradient_coordinate_used": (
-                "tprim/fprim are computed according to manifest.gradient_mapping.coordinate: "
-                "'rho' -> -d ln(X)/d rho, "
-                "'torflux' -> -d ln(X)/d torflux, "
-                "'rho_with_scale' -> gradient_scale * (-d ln(X)/d rho)."
+            "gradient_definition_used": (
+                "tprim/fprim are -X'(rho)/X evaluated on the transport cell faces, from the face gradients "
+                "NEOPAX builds out of its cell-centered state under the run's boundary models."
             ),
-            "torflux_mapping": "torflux is currently assumed to be rho^2.",
-            "alternate_torflux_gradient_columns": "The audit CSV also includes the derived values tprim_if_interpreted_per_torflux and fprim_if_interpreted_per_torflux.",
+            "torflux_mapping": "The torflux column is rho^2. It labels each row and takes no part in tprim/fprim.",
         },
         "rows": rows,
     }
@@ -1367,23 +1017,30 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     if profiles_source == "analytical":
         analytical_n_radii = args.analytical_n_radii
         if analytical_n_radii is None or int(analytical_n_radii) <= 0:
-            # [geometry].n_radial counts transport cells and the scan samples the faces bounding them, so the fallback
-            # is the face count. An explicit --analytical-n-radii stays a literal sample count, subsampling a file
-            # NEOPAX interpolates from.
+            # [geometry].n_radial counts transport cells. The scan samples their bounding faces.
+            # Therefore, the default is the face count. An explicit analytical radius count is also
+            # a face count. It can give NEOPAX a finer or coarser interpolation grid.
             analytical_n_radii = int(geometry_cfg.get("n_radial", 51)) + 1
-        snapshot = _build_standard_analytical_snapshot(
+        vmec_path, booz_path = _resolve_equilibrium_paths(common_config, args)
+        if vmec_path is None or booz_path is None:
+            raise ValueError(
+                "--profiles-source=analytical reconstructs the transport faces on NEOPAX's metre grid, so "
+                "[geometry].vmec_file and [geometry].boozer_file must both resolve"
+            )
+        snapshot = build_analytical_face_state(
             cfg,
-            n_species=len(species),
-            n_points=int(analytical_n_radii),
+            species=species,
+            n_faces=int(analytical_n_radii),
+            minor_radius=read_neopax_minor_radius(Path(vmec_path), Path(booz_path)),
         )
         neopax_result: Path | None = None
     elif profiles_source == "transport_h5":
         if args.neopax_result is None:
             raise ValueError("--neopax-result is required when --profiles-source=transport_h5")
         neopax_result = Path(args.neopax_result).resolve()
-        snapshot = load_neopax_snapshot(neopax_result, species, time_index=int(args.time_index))
+        snapshot = load_neopax_snapshot(neopax_result, time_index=int(args.time_index))
     elif profiles_source == "prescribed":
-        snapshot = _build_prescribed_snapshot(cfg, n_species=len(species))
+        snapshot = build_prescribed_face_state(cfg, n_species=len(species))
         neopax_result = None
     else:
         raise ValueError("--profiles-source must be 'transport_h5', 'analytical', or 'prescribed'")
@@ -2302,8 +1959,6 @@ def cmd_all(args: argparse.Namespace) -> int:
         boozer_file_override=args.boozer_file_override,
         density_floor=args.density_floor,
         temperature_floor=args.temperature_floor,
-        gradient_coordinate=args.gradient_coordinate,
-        gradient_scale=args.gradient_scale,
         tprim_scale=args.tprim_scale,
         fprim_scale=args.fprim_scale,
         tau_e_override=args.tau_e_override,
@@ -2419,7 +2074,7 @@ def _add_common_io_args(parser: argparse.ArgumentParser) -> None:
 def _add_prepare_shaping_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--profiles-source", choices=("transport_h5", "analytical", "prescribed"), default="analytical")
     parser.add_argument("--time-index", type=int, default=-1)
-    parser.add_argument("--analytical-n-radii", type=int, default=None, help="Number of analytical rho points; defaults to [geometry].n_radial + 1 from the NEOPAX config, the transport face grid")
+    parser.add_argument("--analytical-n-radii", type=int, default=None, help="Number of analytical cell faces; defaults to [geometry].n_radial + 1 from the NEOPAX config, the transport face grid")
     parser.add_argument("--electron-model", choices=("adiabatic", "kinetic"), default=None)
     parser.add_argument("--reference-ion", default=None)
     parser.add_argument("--rho-indices", default=None)
@@ -2430,8 +2085,6 @@ def _add_prepare_shaping_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--boozer-file-override", default=None)
     parser.add_argument("--density-floor", type=float, default=1.0e-8)
     parser.add_argument("--temperature-floor", type=float, default=1.0e-8)
-    parser.add_argument("--gradient-coordinate", choices=("rho", "torflux", "rho_with_scale"), default="rho")
-    parser.add_argument("--gradient-scale", type=float, default=1.0)
     parser.add_argument("--tprim-scale", type=float, default=1.0)
     parser.add_argument("--fprim-scale", type=float, default=1.0)
     parser.add_argument("--tau-e-override", type=float, default=None)

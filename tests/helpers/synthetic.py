@@ -31,14 +31,17 @@ def write_transport_solution(
     temperature_face: np.ndarray | None = None,
     density_face: np.ndarray | None = None,
     er_face: np.ndarray | None = None,
+    r_grid_half: np.ndarray | None = None,
+    density_grad_face: np.ndarray | None = None,
+    temperature_grad_face: np.ndarray | None = None,
+    final_time: float | None = None,
+    next_dt: float | None = None,
 ) -> Path:
     """Write a synthetic ``transport_solution.h5`` from caller-supplied profiles.
 
-    NEOPAX solves on a staggered finite-volume grid: the evolved state sits on ``n_rho``
-    cell centers (``rho``) while the face quantities sit on the ``n_rho + 1`` faces
-    (``rho_face``) that bound those cells. The face datasets are written under NEOPAX's own
-    plural names (``density_faces`` and friends) against the singular ``rho_face``, matching
-    the spelling split in its ``write_transport_hdf5``.
+    NEOPAX stores evolved state on ``n_rho`` cell centers. It stores face quantities on the
+    ``n_rho + 1`` bounding faces. Face dataset names are plural, but ``rho_face`` is singular.
+    This naming matches ``write_transport_hdf5``.
 
     Parameters
     ----------
@@ -47,10 +50,9 @@ def write_transport_solution(
     rho : np.ndarray
         Cell-center radial coordinate, shape ``(n_rho,)``.
     pressure, temperature, density : np.ndarray, optional
-        Species-resolved profiles shaped ``(n_species, n_rho)`` for a static profile
-        or ``(n_time, n_species, n_rho)`` for a time-resolved one. Provide either
-        ``pressure`` or both ``temperature`` and ``density`` so a reader can form a
-        total pressure.
+        Species profiles. Static profiles have shape ``(n_species, n_rho)``. Time-resolved
+        profiles have shape ``(n_time, n_species, n_rho)``. Supply ``pressure`` or both
+        ``temperature`` and ``density``.
     er : np.ndarray, optional
         Radial electric field ``Er``, shape ``(n_rho,)`` static or ``(n_time, n_rho)``
         time-resolved. Carries no species axis. Required by the Stage 3/4 readers.
@@ -60,6 +62,15 @@ def write_transport_solution(
         Face-grid counterparts of the profiles above, carrying ``n_rho + 1`` radial
         entries. Written as ``pressure_faces``, ``temperature_faces``, ``density_faces``
         and ``Er_faces``.
+    r_grid_half : np.ndarray, optional
+        The face grid in metres, shape ``(n_rho + 1,)``. NEOPAX builds it as its minor radius
+        times ``rho_face``, which is the scale the face gradients are per.
+    density_grad_face, temperature_grad_face : np.ndarray, optional
+        Radial gradients of the face profiles against ``r_grid_half``, shaped like
+        ``density_face``. Written as ``density_grad_faces`` and ``temperature_grad_faces``.
+    final_time, next_dt : float, optional
+        Solver clock in seconds. These values contain the reached time and the next step. The
+        function writes scalar datasets and omits values set to ``None``.
 
     Returns
     -------
@@ -70,6 +81,11 @@ def write_transport_solution(
         f.create_dataset("rho", data=np.asarray(rho, dtype=float))
         if rho_face is not None:
             f.create_dataset("rho_face", data=np.asarray(rho_face, dtype=float))
+        if r_grid_half is not None:
+            f.create_dataset("r_grid_half", data=np.asarray(r_grid_half, dtype=float))
+        for name, scalar in (("final_time", final_time), ("next_dt", next_dt)):
+            if scalar is not None:
+                f.create_dataset(name, data=np.float64(scalar))
         for name, arr in (
             ("pressure", pressure),
             ("temperature", temperature),
@@ -79,6 +95,8 @@ def write_transport_solution(
             ("temperature_faces", temperature_face),
             ("density_faces", density_face),
             ("Er_faces", er_face),
+            ("density_grad_faces", density_grad_face),
+            ("temperature_grad_faces", temperature_grad_face),
         ):
             if arr is not None:
                 f.create_dataset(name, data=np.asarray(arr, dtype=float))

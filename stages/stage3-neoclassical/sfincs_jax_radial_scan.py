@@ -36,7 +36,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 import sys
@@ -45,13 +44,18 @@ from typing import Any
 
 import h5py
 import numpy as np
+from common.neopax_geometry import read_neopax_minor_radius
+from common.neopax_profiles import (
+    NEOPAX_DENSITY_REFERENCE_M3,
+    NEOPAX_TEMPERATURE_REFERENCE_EV,
+    FaceState,
+    SpeciesMeta,
+    build_analytical_face_state,
+    build_prescribed_face_state,
+    read_transport_face_state,
+)
 from scipy.constants import elementary_charge, proton_mass
 
-# Face-grid datasets required of a NEOPAX transport_solution.h5, alongside its cell-centered state.
-_TRANSPORT_FACE_DATASETS = ("rho_face", "density_faces", "Er_faces")
-
-NEOPAX_DENSITY_REFERENCE_M3 = 1.0e20
-NEOPAX_TEMPERATURE_REFERENCE_EV = 1.0e3
 SFINCS_REFERENCE_R_M = 1.0
 SFINCS_REFERENCE_MASS_KG = proton_mass
 SFINCS_REFERENCE_T_J = NEOPAX_TEMPERATURE_REFERENCE_EV * elementary_charge
@@ -71,29 +75,12 @@ except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib  # type: ignore[import-not-found,no-redef]
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_DIR = Path(__file__).resolve().parent
 STAGES_DIR = SCRIPT_DIR.parent
 
 DEFAULT_COMMON_CONFIG = STAGES_DIR.parent / "inputs" / "quick_run" / "common_input.toml"
 DEFAULT_SFINCS_TEMPLATE = STAGES_DIR.parent / "inputs" / "quick_run" / "sfincs_input.HSX_vacuum_ns201_quickrun"
 DEFAULT_OUTPUT_DIR = STAGES_DIR.parent / "outputs" / "quick_run" / "stage3_neoclassical"
-
-
-@dataclass(frozen=True)
-class SpeciesMeta:
-    name: str
-    charge: float
-    mass_mp: float
-
-
-@dataclass(frozen=True)
-class TransportSnapshot:
-    rho: np.ndarray
-    density: np.ndarray
-    temperature: np.ndarray
-    er: np.ndarray
-    time_value: float | None
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -139,283 +126,6 @@ def _parse_species_from_config(cfg: dict[str, Any]) -> list[SpeciesMeta]:
     ]
 
 
-def _load_transport_snapshot(h5_path: Path, *, time_index: int) -> TransportSnapshot:
-    """Read one time slice of a NEOPAX ``transport_solution.h5`` on its **face** grid.
-
-    NEOPAX evolves its state on the ``n_radial`` cell centers and writes those as ``rho`` /
-    ``density`` / ``temperature`` / ``Er``, but the centers span neither ``rho = 0`` nor
-    ``rho = rho_edge``. A scan built from them would write a flux file stopping short at both ends,
-    where NEOPAX's own interpolation returns NaN. The ``n_radial + 1`` faces are the grid it
-    interpolates a flux file onto, so this reads the ``*_faces`` datasets instead, the same face
-    state the closed loop's prescribed block carries.
-
-    Raises
-    ------
-    KeyError
-        If the face datasets are absent, as in a solution from a NEOPAX predating the staggered
-        grid. Falling back to the centers would silently sample the wrong radii.
-    IndexError
-        If ``time_index`` falls outside the file's time axis.
-    """
-    with h5py.File(h5_path, "r") as f:
-        keys = set(f.keys())
-        if "rho" not in keys or "density" not in keys or "Er" not in keys:
-            raise KeyError(f"{h5_path} is missing required NEOPAX transport datasets.")
-        missing = [name for name in _TRANSPORT_FACE_DATASETS if name not in keys]
-        if missing:
-            raise KeyError(
-                f"{h5_path} is missing the transport face datasets: {', '.join(missing)}. They are written "
-                "only by NEOPAX revisions that solve on the staggered cell/face grid, and the cell-centered "
-                "datasets cannot stand in: they span neither rho = 0 nor rho = rho_edge, so a flux file built "
-                "from them leaves both ends of NEOPAX's own grid outside its knots."
-            )
-
-        rho = np.asarray(f["rho_face"][()], dtype=np.float64)
-        density_all = np.asarray(f["density_faces"][()], dtype=np.float64)
-        er_all = np.asarray(f["Er_faces"][()], dtype=np.float64)
-
-        if "temperature_faces" in keys:
-            temperature_all = np.asarray(f["temperature_faces"][()], dtype=np.float64)
-        elif "pressure_faces" in keys:
-            pressure_all = np.asarray(f["pressure_faces"][()], dtype=np.float64)
-            density_safe = np.maximum(density_all, 1.0e-30)
-            temperature_all = pressure_all / density_safe
-        else:
-            raise KeyError(f"{h5_path} must contain either temperature_faces or pressure_faces.")
-
-        ts = np.asarray(f["ts"][()], dtype=np.float64) if "ts" in keys else None
-
-    if density_all.ndim == 2:
-        if int(time_index) != -1:
-            raise ValueError(
-                f"{h5_path} stores a single static profile slice with no time axis, so --time-index "
-                f"{time_index} cannot be selected"
-            )
-        idx = 0
-        density = density_all
-        temperature = temperature_all
-        er = er_all
-    else:
-        idx = int(time_index)
-        if idx < 0:
-            idx = density_all.shape[0] + idx
-        if idx < 0 or idx >= density_all.shape[0]:
-            raise IndexError(f"time index {time_index} out of range for {h5_path}")
-        density = np.asarray(density_all[idx], dtype=np.float64)
-        temperature = np.asarray(temperature_all[idx], dtype=np.float64)
-        er = np.asarray(er_all[idx], dtype=np.float64)
-
-    time_value = None if ts is None else float(ts[idx])
-    return TransportSnapshot(rho=rho, density=density, temperature=temperature, er=er, time_value=time_value)
-
-
-def _match_species_factors(raw: Any, n_species: int, *, default: float) -> np.ndarray:
-    if raw is None:
-        return np.full((n_species,), float(default), dtype=np.float64)
-    if isinstance(raw, (int, float)):
-        return np.full((n_species,), float(raw), dtype=np.float64)
-    arr = np.asarray(list(raw), dtype=np.float64)
-    if arr.size == 1:
-        return np.full((n_species,), float(arr[0]), dtype=np.float64)
-    if arr.size != n_species:
-        raise ValueError(f"Expected {n_species} profile factors, got {arr.size}")
-    return arr
-
-
-def _build_standard_analytical_snapshot(
-    cfg: dict[str, Any],
-    *,
-    n_species: int,
-    n_points: int,
-) -> TransportSnapshot:
-    """Evaluate the analytical profile model on ``n_points`` radii spanning ``[0, rho_edge]``.
-
-    ``n_points`` is a literal sample count, not a cell count. NEOPAX's cell count ``n_radial``
-    describes ``n_radial + 1`` faces, so a caller wanting the scan to land exactly on the transport
-    face grid passes ``n_radial + 1``. This scan's default oversamples that grid instead, which is a
-    valid input for NEOPAX to interpolate from as long as it still spans ``[0, rho_edge]``.
-    """
-    profile_cfg = cfg.get("profiles", {})
-    rho_edge = float(cfg.get("geometry", {}).get("rho_edge", 1.0))
-    rho = np.linspace(0.0, rho_edge, int(n_points), dtype=np.float64)
-    x = rho / max(float(rho[-1]) if rho.size else 1.0, 1.0e-30)
-
-    n0 = _match_species_factors(profile_cfg.get("n0", profile_cfg.get("ni0", profile_cfg.get("ne0", 4.21))), n_species, default=4.21)
-    n_edge = _match_species_factors(profile_cfg.get("n_edge", profile_cfg.get("nib", profile_cfg.get("neb", 0.6))), n_species, default=0.6)
-    t0 = _match_species_factors(profile_cfg.get("T0", profile_cfg.get("ti0", profile_cfg.get("te0", 17.8))), n_species, default=17.8)
-    t_edge = _match_species_factors(profile_cfg.get("T_edge", profile_cfg.get("tib", profile_cfg.get("teb", 0.7))), n_species, default=0.7)
-    density_shape_power = _match_species_factors(profile_cfg.get("density_shape_power", 2.0), n_species, default=2.0)
-    density_shape_alpha = _match_species_factors(profile_cfg.get("density_shape_alpha", 1.0), n_species, default=1.0)
-    temperature_shape_power = _match_species_factors(profile_cfg.get("temperature_shape_power", 2.0), n_species, default=2.0)
-    temperature_shape_alpha = _match_species_factors(profile_cfg.get("temperature_shape_alpha", 1.0), n_species, default=1.0)
-
-    c_density = profile_cfg.get("c_density")
-    if c_density is None and n_species == 3:
-        deuterium_ratio = float(profile_cfg.get("deuterium_ratio", 0.5))
-        tritium_ratio = float(profile_cfg.get("tritium_ratio", 0.5))
-        c_density = [1.0, deuterium_ratio, tritium_ratio]
-
-    density_species_scale = _match_species_factors(c_density, n_species, default=1.0)
-    temperature_species_scale = _match_species_factors(profile_cfg.get("c_temperature"), n_species, default=1.0)
-    density_global_scale = _match_species_factors(profile_cfg.get("n_scale", 1.0), n_species, default=1.0)
-    temperature_global_scale = _match_species_factors(profile_cfg.get("T_scale", 1.0), n_species, default=1.0)
-
-    density = np.zeros((n_species, rho.size), dtype=np.float64)
-    temperature = np.zeros((n_species, rho.size), dtype=np.float64)
-    for i in range(n_species):
-        density_shape = (1.0 - x**density_shape_power[i]) ** density_shape_alpha[i]
-        temperature_shape = (1.0 - x**temperature_shape_power[i]) ** temperature_shape_alpha[i]
-        density_base = n_edge[i] + (n0[i] - n_edge[i]) * density_shape
-        temperature_base = t_edge[i] + (t0[i] - t_edge[i]) * temperature_shape
-        density[i, :] = density_species_scale[i] * density_global_scale[i] * density_base
-        temperature[i, :] = temperature_species_scale[i] * temperature_global_scale[i] * temperature_base
-
-    er0_scale = float(profile_cfg.get("er0_scale", 100.0))
-    er0_peak_rho = float(profile_cfg.get("er0_peak_rho", 0.8))
-    er = er0_scale * x * (er0_peak_rho - x)
-
-    return TransportSnapshot(
-        rho=np.asarray(rho, dtype=np.float64),
-        density=np.asarray(density, dtype=np.float64),
-        temperature=np.asarray(temperature, dtype=np.float64),
-        er=np.asarray(er, dtype=np.float64),
-        time_value=None,
-    )
-
-
-def _require_profile_array(profile_cfg: dict[str, Any], key: str, *, ndim: int) -> np.ndarray:
-    """Read a required ``[profiles]`` array as float64 and check its dimensionality."""
-    if key not in profile_cfg:
-        raise ValueError(f"[profiles].{key} is required when --profiles-source=prescribed")
-    array = np.asarray(profile_cfg[key], dtype=np.float64)
-    if array.ndim != ndim:
-        raise ValueError(f"[profiles].{key} must be {ndim}-D, got shape {array.shape}")
-    return array
-
-
-def _require_face_arrays(
-    profile_cfg: dict[str, Any], *, n_species: int, n_radial: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Read and shape-check the ``[profiles]`` face arrays against ``n_radial`` cells.
-
-    Parameters
-    ----------
-    profile_cfg : dict[str, Any]
-        The parsed ``[profiles]`` section.
-    n_species : int
-        Number of species the run expects.
-    n_radial : int
-        Number of transport cells, so the arrays must carry ``n_radial + 1`` radial entries.
-
-    Returns
-    -------
-    tuple of numpy.ndarray
-        ``(density_face, temperature_face, er_face)`` in the block's SI units.
-
-    Raises
-    ------
-    ValueError
-        If an array is absent or does not span the ``n_radial + 1`` cell faces.
-    """
-    n_faces = n_radial + 1
-    density_face = _require_profile_array(profile_cfg, "density_face", ndim=2)
-    temperature_face = _require_profile_array(profile_cfg, "temperature_face", ndim=2)
-    er_face = _require_profile_array(profile_cfg, "Er_face", ndim=1)
-    for key, array in (("density_face", density_face), ("temperature_face", temperature_face)):
-        if array.shape != (n_species, n_faces):
-            raise ValueError(
-                f"[profiles].{key} has shape {array.shape}, expected {(n_species, n_faces)}: one row per "
-                f"species and one column per cell face, which is [geometry].n_radial + 1"
-            )
-    if er_face.size != n_faces:
-        raise ValueError(
-            f"[profiles].Er_face holds {er_face.size} points, expected {n_faces} to span the same cell "
-            "faces as [profiles].density_face"
-        )
-    return density_face, temperature_face, er_face
-
-
-def _build_prescribed_snapshot(cfg: dict[str, Any], *, n_species: int) -> TransportSnapshot:
-    """Build a snapshot from the prescribed profile arrays stored in the config ``[profiles]`` section.
-
-    The block carries both of NEOPAX's radial grids. ``density`` / ``temperature`` / ``Er`` hold one
-    value per **cell center** and are what NEOPAX itself reads back, so they are validated here but
-    not used. ``density_face`` / ``temperature_face`` / ``Er_face`` hold one value per **cell face**,
-    and the snapshot is built from those: the scan samples fluxes on the faces because that is the
-    grid NEOPAX interpolates a flux file onto.
-
-    The face values are never reconstructed from the centered ones. NEOPAX builds them under the
-    run's own boundary models, so a block missing them is rejected rather than extrapolated -- an
-    extrapolation invented here would disagree with the solver wherever the outer boundary is not a
-    plain Dirichlet, which is exactly the case for the Robin temperature edge the quick run uses.
-
-    The prescribed arrays are SI (density m^-3, temperature eV), so both are divided by the
-    NEOPAX reference values to reach the snapshot units of 1e20 m^-3 and keV. Er is kV/m in
-    both and passes through unchanged. The arrays carry no radial coordinate, so the grid is
-    rebuilt from the same ``[geometry]`` block the transport solver builds its own grid from.
-
-    Parameters
-    ----------
-    cfg : dict[str, Any]
-        Parsed common-input TOML.
-    n_species : int
-        Number of species the run expects, taken from ``[species].names``.
-
-    Returns
-    -------
-    TransportSnapshot
-        Profiles on the reconstructed radial grid, in snapshot units.
-    """
-    profile_cfg = cfg.get("profiles", {})
-    model = str(profile_cfg.get("model", "")).strip().lower()
-    if model != "prescribed":
-        raise ValueError(f"[profiles].model is {model!r}; --profiles-source=prescribed requires 'prescribed'")
-    density = _require_profile_array(profile_cfg, "density", ndim=2)
-    temperature = _require_profile_array(profile_cfg, "temperature", ndim=2)
-    er = _require_profile_array(profile_cfg, "Er", ndim=1)
-    if temperature.shape != density.shape:
-        raise ValueError(
-            f"[profiles].temperature has shape {temperature.shape}, expected the [profiles].density "
-            f"shape {density.shape}"
-        )
-    if density.shape[0] != n_species:
-        raise ValueError(
-            f"[profiles].density holds {density.shape[0]} species rows, expected {n_species} to match "
-            "the number of entries in [species].names"
-        )
-    n_radial = int(density.shape[1])
-    if er.size != n_radial:
-        raise ValueError(f"[profiles].Er holds {er.size} points, expected {n_radial} to match [profiles].density")
-    geometry_cfg = cfg.get("geometry", {})
-    if "n_radial" not in geometry_cfg:
-        raise ValueError("[geometry].n_radial is required when --profiles-source=prescribed")
-    if n_radial != int(geometry_cfg["n_radial"]):
-        raise ValueError(
-            f"[profiles] arrays hold {n_radial} radial points, expected {int(geometry_cfg['n_radial'])} "
-            "to match [geometry].n_radial"
-        )
-    # The gradients are taken on the faces, so the floor is a face count: three faces for np.gradient's
-    # edge_order=2. That is two cells, which also clears NEOPAX's own two-cell minimum for extrapolating
-    # its outer boundary value from the cell-centered arrays this same block carries.
-    if n_radial + 1 < 3:
-        raise ValueError(
-            f"[profiles] arrays hold {n_radial} cells, giving {n_radial + 1} faces; the radial gradients "
-            "need at least 3 faces"
-        )
-
-    density_face, temperature_face, er_face = _require_face_arrays(
-        profile_cfg, n_species=n_species, n_radial=n_radial
-    )
-    rho_edge = float(geometry_cfg.get("rho_edge", 1.0))
-    return TransportSnapshot(
-        rho=np.linspace(0.0, rho_edge, n_radial + 1, dtype=np.float64),
-        density=density_face / NEOPAX_DENSITY_REFERENCE_M3,
-        temperature=temperature_face / NEOPAX_TEMPERATURE_REFERENCE_EV,
-        er=er_face,
-        time_value=None,
-    )
-
-
 def _parse_index_list(text: str | None) -> list[int] | None:
     if text is None or not text.strip():
         return None
@@ -458,10 +168,6 @@ def _choose_radius_indices(
         return [int(v) for v in candidates]
     picks = np.linspace(0, candidates.size - 1, int(num_radii))
     return sorted(set(int(candidates[int(round(p))]) for p in picks))
-
-
-def _gradient_profile(values: np.ndarray, rho: np.ndarray) -> np.ndarray:
-    return np.gradient(np.asarray(values, dtype=np.float64), np.asarray(rho, dtype=np.float64), edge_order=2)
 
 
 def _bool_literal(value: bool) -> str:
@@ -527,7 +233,7 @@ def _prepare_input_text(
     *,
     template_text: str,
     species: list[SpeciesMeta],
-    snapshot: TransportSnapshot,
+    snapshot: FaceState,
     radius_index: int,
     include_phi1: bool | None,
     resolution_overrides: dict[str, int | None],
@@ -537,9 +243,10 @@ def _prepare_input_text(
     density = snapshot.density
     temperature = snapshot.temperature
     er = snapshot.er
-
-    dndr = np.vstack([_gradient_profile(density[i], rho) for i in range(density.shape[0])])
-    dtdr = np.vstack([_gradient_profile(temperature[i], rho) for i in range(temperature.shape[0])])
+    # sfincs reads dNHatdrNs and dTHatdrNs against rN, which is rho.
+    # Therefore, the namelist uses the per-rho face gradients from the profile state.
+    dndr = snapshot.density_grad
+    dtdr = snapshot.temperature_grad
 
     text = template_text
     text = _patch_group_value(text=text, group="general", key="RHSMode", value=1)
@@ -617,12 +324,22 @@ def _prepare_input_text(
 
 def _infer_wout_path(config_path: Path, cfg: dict[str, Any], explicit: str | None) -> Path | None:
     if explicit:
+        # Resolve a command-line override as an absolute path or relative to the current directory.
+        # Do not resolve it relative to the NEOPAX root.
+        expanded = os.path.expandvars(os.path.expanduser(explicit))
+        return Path(expanded).resolve()
+    geometry_cfg = cfg.get("geometry", {})
+    return _resolve_relative(_infer_neopax_root(config_path), geometry_cfg.get("vmec_file"))
+
+
+def _infer_booz_path(config_path: Path, cfg: dict[str, Any], explicit: str | None) -> Path | None:
+    if explicit:
         # CLI override: standard path semantics (absolute or relative to CWD),
         # not relative to the NEOPAX root.
         expanded = os.path.expandvars(os.path.expanduser(explicit))
         return Path(expanded).resolve()
     geometry_cfg = cfg.get("geometry", {})
-    return _resolve_relative(_infer_neopax_root(config_path), geometry_cfg.get("vmec_file"))
+    return _resolve_relative(_infer_neopax_root(config_path), geometry_cfg.get("boozer_file"))
 
 
 def _last_species_vector(arr: np.ndarray, n_species: int) -> np.ndarray:
@@ -693,7 +410,6 @@ def _extract_flux_triplet(
 
 def _build_worker_env(args: argparse.Namespace, *, gpu_id: str | None) -> dict[str, str]:
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     env.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     if args.dense_fp_max is not None:
         env["SFINCS_JAX_RHSMODE1_DENSE_FP_MAX"] = str(int(args.dense_fp_max))
@@ -776,9 +492,6 @@ def _run_single_worker_from_payload(payload_path: Path) -> int:
     n_species = int(payload["n_species"])
     benchmark_repeats = max(0, int(payload.get("benchmark_repeats", 0)))
     benchmark_warmup = max(0, int(payload.get("benchmark_warmup", 0)))
-
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
 
     from sfincs_jax.io import read_sfincs_h5, write_sfincs_jax_output_h5
 
@@ -1128,17 +841,31 @@ def _prepare(args: argparse.Namespace) -> tuple[dict[str, Any], list[Path]]:
     config_path = Path(args.common_config).resolve()
     cfg = _load_toml(config_path)
     species = _parse_species_from_config(cfg)
+    wout_path = _infer_wout_path(config_path, cfg, args.wout_path)
+    booz_path = _infer_booz_path(config_path, cfg, args.boozer_path)
     profiles_source = str(args.profiles_source).lower()
     if profiles_source == "analytical":
         transport_solution = None
-        snapshot = _build_standard_analytical_snapshot(
+        analytical_n_radii = args.analytical_n_radii
+        if analytical_n_radii is None or int(analytical_n_radii) <= 0:
+            # [geometry].n_radial counts transport cells. The scan samples their bounding faces.
+            # Therefore, the default is the face count. An explicit analytical radius count is also
+            # a face count. It can give NEOPAX a finer or coarser interpolation grid.
+            analytical_n_radii = int(cfg.get("geometry", {}).get("n_radial", 51)) + 1
+        if wout_path is None or booz_path is None:
+            raise ValueError(
+                "--profiles-source=analytical reconstructs the transport faces on NEOPAX's metre grid, so "
+                "[geometry].vmec_file and [geometry].boozer_file must both resolve"
+            )
+        snapshot = build_analytical_face_state(
             cfg,
-            n_species=len(species),
-            n_points=int(args.analytical_n_radii),
+            species=species,
+            n_faces=int(analytical_n_radii),
+            minor_radius=read_neopax_minor_radius(wout_path, booz_path),
         )
     elif profiles_source == "prescribed":
         transport_solution = None
-        snapshot = _build_prescribed_snapshot(cfg, n_species=len(species))
+        snapshot = build_prescribed_face_state(cfg, n_species=len(species))
     else:
         transport_solution = (
             Path(args.neopax_result).resolve()
@@ -1150,7 +877,7 @@ def _prepare(args: argparse.Namespace) -> tuple[dict[str, Any], list[Path]]:
                 f"Could not find NEOPAX transport result at {transport_solution}. "
                 "If needed, enable [transport_output].transport_write_hdf5 = true and rerun NEOPAX."
             )
-        snapshot = _load_transport_snapshot(transport_solution, time_index=int(args.time_index))
+        snapshot = read_transport_face_state(transport_solution, time_index=int(args.time_index))
     explicit_indices = _parse_index_list(args.rho_indices)
     radius_indices = _choose_radius_indices(
         snapshot.rho,
@@ -1167,7 +894,6 @@ def _prepare(args: argparse.Namespace) -> tuple[dict[str, Any], list[Path]]:
     run_dir = output_dir / "runs"
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    wout_path = _infer_wout_path(config_path, cfg, args.wout_path)
     resolution_overrides = {
         "Ntheta": args.ntheta,
         "Nzeta": args.nzeta,
@@ -1255,6 +981,7 @@ def _prepare(args: argparse.Namespace) -> tuple[dict[str, Any], list[Path]]:
             {"name": sp.name, "charge": sp.charge, "mass_mp": sp.mass_mp} for sp in species
         ],
         "wout_path": None if wout_path is None else str(wout_path),
+        "boozer_path": None if booz_path is None else str(booz_path),
         "runs": manifest_runs,
     }
     manifest_path = output_dir / "manifest.json"
@@ -1527,8 +1254,11 @@ def _add_io_and_shaping(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--analytical-n-radii",
         type=int,
-        default=51,
-        help="Number of rho grid points to reconstruct for profiles-source=analytical.",
+        default=None,
+        help=(
+            "Number of analytical cell faces; defaults to [geometry].n_radial + 1 from the NEOPAX config, "
+            "the transport face grid"
+        ),
     )
     p.add_argument(
         "--sfincs-template",
@@ -1542,6 +1272,11 @@ def _add_io_and_shaping(p: argparse.ArgumentParser) -> None:
     p.add_argument("--rho-max", type=float, default=None, help="Maximum rho to include.")
     p.add_argument("--num-radii", type=int, default=None, help="Number of radii to sample inside the rho filter.")
     p.add_argument("--wout-path", default=None, help="Optional VMEC equilibrium override for sfincs_jax.")
+    p.add_argument(
+        "--boozer-path",
+        default=None,
+        help="Optional Boozer equilibrium override for the NEOPAX minor radius the analytical faces are built on.",
+    )
     p.add_argument("--include-phi1", dest="include_phi1", action="store_true", help="Force includePhi1 = true.")
     p.add_argument("--no-include-phi1", dest="include_phi1", action="store_false", help="Force includePhi1 = false.")
     p.set_defaults(include_phi1=None)
