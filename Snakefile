@@ -79,6 +79,8 @@ def _apptainer_image_ref(image: str) -> str:
     return f"oras://{repo}:apptainer-{tag}"
 
 
+CONTAINER_PYTHONPATH = "/work/stages"
+
 # Docker keeps the newer per-device slot allocator. On HTCondor, each Apptainer
 # job already receives one isolated GPU, which `--nv` exposes to the nested SIF.
 if CONTAINER_RUNTIME == "docker":
@@ -94,6 +96,7 @@ if CONTAINER_RUNTIME == "docker":
     docker_tail = (
         f'{resolve_docker_user(config)}'
         '-e HOME=/tmp '
+        f'-e PYTHONPATH={CONTAINER_PYTHONPATH} '
         '-v "$PWD:/work" -w /work '
     )
     CONTAINER_PREFIX = f"{slot_prefix}docker run --rm --pull=missing {gpu_flag}{docker_tail}"
@@ -104,7 +107,7 @@ if CONTAINER_RUNTIME == "docker":
         return image
 else:
     gpu_flag = "--nv " if DEVICE == "gpu" else ""
-    apptainer_tail = f'{_apptainer_bind_flags(config)} --pwd /work '
+    apptainer_tail = f'{_apptainer_bind_flags(config)} --env PYTHONPATH={CONTAINER_PYTHONPATH} --pwd /work '
     # --unsquash avoids FUSE-based SIF mounts on execute nodes whose parent
     # HTCondor container does not expose /dev/fuse.
     CONTAINER_PREFIX = f"apptainer run --unsquash {gpu_flag}{apptainer_tail}"

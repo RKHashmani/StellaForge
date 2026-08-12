@@ -48,6 +48,7 @@ cmd = "sfincs_jax ../inputs/quick_run/sfincs_input.HSX_vacuum_ns201_quickrun --o
 
 [feature.sfincs-jax.tasks.stage-3-sfincs-radial-scan]
 cmd = "python stage3-neoclassical/sfincs_jax_radial_scan.py"
+env = { PYTHONPATH = "$PIXI_PROJECT_ROOT" }
 
 [feature.neo-jax.dependencies]
 neo-jax = ">=1.0.1,<2"
@@ -73,6 +74,7 @@ cmd = "gkx run --config ../inputs/quick_run/HSX_vacuum_ns201_quickrun.toml --out
 
 [feature.gkx.tasks.stage-4-gkx-radial-scan]
 cmd = "python stage4-turbulence/gkx_radial_scan.py"
+env = { PYTHONPATH = "$PIXI_PROJECT_ROOT" }
 
 [feature.neopax.dependencies]
 scipy = ">=1.17.1,<2"
