@@ -385,5 +385,6 @@ rule stage5_post_processing:
         'python stages/stage5-post-processing/write_prescribed_profiles_from_transport_h5.py '
         '{input.transport} {input.common_config} --output-toml {output.profiles_feedback} && '
         'python stages/stage5-post-processing/stage5_post_processing.py '
-        f'--transport {{input.transport}} --signal {{output.signal}} --pressure-rel-tol {PRESSURE_REL_TOL}"'
+        '--transport {input.transport} --common-config {input.common_config} '
+        f'--signal {{output.signal}} --pressure-rel-tol {PRESSURE_REL_TOL}"'
         " 2>&1 | tee {log}"

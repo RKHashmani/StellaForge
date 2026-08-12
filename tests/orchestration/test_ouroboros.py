@@ -1,17 +1,10 @@
-"""Tests for ``src.ouroboros`` (the closed-loop driver).
+"""Test the closed-loop driver in ``src.ouroboros``.
 
-The driver runs repeated Snakemake forward passes, feeding each iteration's
-evolved Stage 1 boundary into the next. These tests pin the orchestration logic
-without running Snakemake or copying real files, using two isolation tricks:
+The driver feeds each evolved Stage 1 boundary into the next Snakemake pass. These tests use an
+absolute ``tmp_path`` output directory. Therefore, all generated paths stay outside the repository.
 
-- Paths stay in tmp. ``resolve_pipeline_paths`` builds every path as
-  ``f"{output_dir}/..."`` and ``ouroboros._abs`` passes absolute paths through
-  unchanged, so giving the config an absolute ``tmp_path`` ``output_dir`` makes
-  every signal file the loop reads and writes land under tmp, never the repo.
-- I/O stays mocked. Monkeypatching the two file-touching collaborators
-  (``_seed_iteration_inputs``, ``run_forward_pass``) isolates the pure
-  control-flow logic, while the fake ``run_forward_pass`` still writes the signal
-  JSON the loop reads back, so the halt/converged branch is genuinely exercised.
+The tests replace file operations and forward passes with test functions. Each simulated pass still
+writes a real signal file. This exercises every terminal status branch without running Snakemake.
 """
 
 from __future__ import annotations
@@ -144,7 +137,7 @@ def test_loop_seeds_from_previous_feedback(monkeypatch: pytest.MonkeyPatch, tmp_
     def fake_run(*, target, **kw):
         signal = Path(target)
         signal.parent.mkdir(parents=True, exist_ok=True)
-        signal.write_text(json.dumps({}))  # neither halt nor converged -> keep looping
+        signal.write_text(json.dumps({"status": "continue"}))  # No stop condition: keep looping.
 
     monkeypatch.setattr(ouroboros, "run_forward_pass", fake_run)
     monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path), "--max-iters", "2"])
@@ -205,7 +198,7 @@ def test_loop_passes_prescribed_overrides_from_second_iteration(
         extras.append(extra_configfiles)
         signal = Path(target)
         signal.parent.mkdir(parents=True, exist_ok=True)
-        signal.write_text(json.dumps({}))
+        signal.write_text(json.dumps({"status": "continue"}))
 
     monkeypatch.setattr(ouroboros, "run_forward_pass", fake_run)
     monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path), "--max-iters", "2"])
@@ -221,11 +214,10 @@ def test_loop_passes_prescribed_overrides_from_second_iteration(
     assert str(extras[1][0]).startswith(f"{tmp_path}/out/loop/iter_2/input")
 
 
-# The loop should stop early when a run reports it has converged or been told to halt. `@pytest.mark.parametrize` runs
-# this twice, once with a `halt` signal and once with a `converged` signal. Each fake run writes that signal, and the
-# test asserts only one iteration happened even though max-iters was 3, proving the terminal signal short-circuits the
-# loop.
-@pytest.mark.parametrize("signal", [{"halt": True}, {"converged": True}])
+# Every status except ``continue`` stops the loop. Each simulated run writes one terminal status.
+# The test confirms that only one of three requested iterations runs.
+@pytest.mark.parametrize("signal", [{"status": s} for s in ("halted", "converged", "horizon")],
+                         ids=["halted", "converged", "horizon"])
 def test_loop_short_circuits_on_terminal_signal(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, signal: dict
 ) -> None:
@@ -244,7 +236,7 @@ def test_loop_short_circuits_on_terminal_signal(
     monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path), "--max-iters", "3"])
     ouroboros.main()
 
-    # A halt or converged signal after iteration 1 stops the loop despite max-iters=3.
+    # Any terminal status after iteration 1 stops the loop despite max-iters=3.
     assert len(calls) == 1
 
 
@@ -278,9 +270,8 @@ def test_main_rejects_reuse_output_dir_in_run_config(monkeypatch: pytest.MonkeyP
     assert not (tmp_path / "out" / "loop").exists()
 
 
-# With every stage frozen no artifact can change between iterations, so the loop has nothing left to feed forward and
-# must stop after one forward pass however many iterations were asked for. The fake run writes a signal that is neither
-# a halt nor a convergence, so a second pass would follow if the all-frozen case did not cap the iteration count.
+# No artifact changes when every stage is frozen. The driver must stop after one pass even when the
+# simulated run reports ``continue``.
 def test_loop_runs_a_single_pass_when_every_stage_is_frozen(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     frozen = {"stage1": False, "stage2": False, "stage3": False, "stage4": False, "stage5": False}
     config_path = _write_config(tmp_path, loop={"rerun": frozen})
@@ -292,7 +283,7 @@ def test_loop_runs_a_single_pass_when_every_stage_is_frozen(monkeypatch: pytest.
         calls.append(target)
         signal = Path(target)
         signal.parent.mkdir(parents=True, exist_ok=True)
-        signal.write_text(json.dumps({}))
+        signal.write_text(json.dumps({"status": "continue"}))
 
     monkeypatch.setattr(ouroboros, "run_forward_pass", fake_run)
     monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path), "--max-iters", "3"])
@@ -322,7 +313,7 @@ def test_frozen_stage1_keeps_seeding_the_base_boundary(monkeypatch: pytest.Monke
     def fake_run(*, target, **kw):
         signal = Path(target)
         signal.parent.mkdir(parents=True, exist_ok=True)
-        signal.write_text(json.dumps({}))
+        signal.write_text(json.dumps({"status": "continue"}))
 
     monkeypatch.setattr(ouroboros, "run_forward_pass", fake_run)
     monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path), "--max-iters", "2"])
@@ -360,7 +351,7 @@ def _overrides_of_second_iteration(monkeypatch: pytest.MonkeyPatch, config_path:
         extras.append(extra_configfiles)
         signal = Path(target)
         signal.parent.mkdir(parents=True, exist_ok=True)
-        signal.write_text(json.dumps({}))
+        signal.write_text(json.dumps({"status": "continue"}))
 
     monkeypatch.setattr(ouroboros, "run_forward_pass", fake_run)
     monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path), "--max-iters", "2"])

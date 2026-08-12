@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from tests.helpers.stage_import import load_stage_module
 from tests.helpers.synthetic import write_transport_solution
@@ -57,18 +58,88 @@ def test_pressure_converged_false_for_large_change(tmp_path: Path) -> None:
     assert not post.pressure_converged(f, rel_tol=1e-2)
 
 
-# `build_signal` produces the `{converged, halt}` dict the loop reads. A non-physical (non-positive) total pressure
-# means the run has gone bad and should stop. This forces the total pressure negative at one radius and asserts the
-# signal is halt=True (and converged=False), so the loop aborts.
+# Transport horizon
+
+# Each pass resumes where the last pass stopped. Therefore, ``t_final`` is the absolute end time.
+# Reaching it leaves no time for another pass.
+CLOCK_TEMPLATE = "[transport_solver]\nt0 = 0.0\nt_final = 2.0\ndt = 0.5\n"
+
+
+def _clock_template(tmp_path: Path, name: str = "common_input.toml") -> Path:
+    """Write a minimal template carrying only the horizon the signal is compared against."""
+    path = tmp_path / name
+    path.write_text(CLOCK_TEMPLATE)
+    return path
+
+
+def _with_clock(path: Path, final_time: float) -> Path:
+    """Add the ``final_time`` scalar that NEOPAX writes beside the profiles."""
+    import h5py
+
+    with h5py.File(path, "a") as f:
+        f.create_dataset("final_time", data=np.asarray(final_time))
+    return path
+
+
+@pytest.mark.parametrize(
+    ("final_time", "reached"), [(1.0, False), (2.0, True), (3.0, True)],
+    ids=["before", "at", "past"],
+)
+def test_transport_horizon_reached_compares_the_clock_against_t_final(
+    tmp_path: Path, final_time: float, reached: bool
+) -> None:
+    f = _with_clock(_write(tmp_path / "clock.h5", _static(2.0), _static(2.0, n_rho=6)), final_time)
+    assert post.transport_horizon_reached(f, _clock_template(tmp_path)) is reached
+
+
+# A solution without an exported clock cannot be compared with the horizon. The loop must not guess.
+def test_transport_horizon_needs_the_solutions_clock(tmp_path: Path) -> None:
+    f = _write(tmp_path / "no_clock.h5", _static(2.0), _static(2.0, n_rho=6))
+    with pytest.raises(KeyError, match="final_time"):
+        post.transport_horizon_reached(f, _clock_template(tmp_path))
+
+
+def test_transport_horizon_needs_a_configured_end_time(tmp_path: Path) -> None:
+    f = _with_clock(_write(tmp_path / "clock.h5", _static(2.0), _static(2.0, n_rho=6)), 1.0)
+    template = tmp_path / "no_horizon.toml"
+    template.write_text("[transport_solver]\nt0 = 0.0\ndt = 0.5\n")
+    with pytest.raises(KeyError, match=r"\[transport_solver\]\.t_final"):
+        post.transport_horizon_reached(f, template)
+
+
+# Signal construction
+
+# ``build_signal`` returns the status dictionary that the loop reads. Non-positive total pressure
+# stops the run with ``halted``. This test makes one radius negative. The pressure check runs before
+# the clock check, so this fixture needs no ``final_time``.
 def test_build_signal_halts_on_nonpositive_pressure(tmp_path: Path) -> None:
     pressure_face = _static(2.0, n_rho=6)
     pressure_face[:, 2] = -1.0  # summed total pressure is non-positive at one radius
     f = _write(tmp_path / "halt.h5", _static(2.0), pressure_face)
-    assert post.build_signal(f, rel_tol=1e-2) == {"converged": False, "halt": True}
+    assert post.build_signal(f, rel_tol=1e-2, common_config=_clock_template(tmp_path)) == {"status": "halted"}
 
 
-def test_build_signal_converged_without_halt(tmp_path: Path) -> None:
+# Convergence takes priority when a settled pass also reaches the horizon. This case must return
+# ``converged``.
+def test_build_signal_reports_convergence_ahead_of_the_horizon(tmp_path: Path) -> None:
     slice0 = _static(2.0, n_rho=6)
     pressure_3d = np.stack([slice0, slice0 * 1.0001])
-    f = _write(tmp_path / "ok.h5", np.stack([_static(2.0)] * 2), pressure_3d)
-    assert post.build_signal(f, rel_tol=1e-2) == {"converged": True, "halt": False}
+    f = _with_clock(_write(tmp_path / "ok.h5", np.stack([_static(2.0)] * 2), pressure_3d), 2.0)
+    assert post.build_signal(f, rel_tol=1e-2, common_config=_clock_template(tmp_path)) == {"status": "converged"}
+
+
+# This profile is not settled and has no transport time left. Another pass would repeat the same
+# window and discard the adapted step size. The loop must stop.
+def test_build_signal_reports_the_horizon_when_not_converged(tmp_path: Path) -> None:
+    slice0 = _static(2.0, n_rho=6)
+    pressure_3d = np.stack([slice0, slice0 * 2.0])  # 100% change, so not converged
+    f = _with_clock(_write(tmp_path / "out_of_time.h5", np.stack([_static(2.0)] * 2), pressure_3d), 2.0)
+    assert post.build_signal(f, rel_tol=1e-2, common_config=_clock_template(tmp_path)) == {"status": "horizon"}
+
+
+# Not settled, with transport time left. This is the only status that runs another pass.
+def test_build_signal_continues_with_time_left(tmp_path: Path) -> None:
+    slice0 = _static(2.0, n_rho=6)
+    pressure_3d = np.stack([slice0, slice0 * 2.0])
+    f = _with_clock(_write(tmp_path / "more.h5", np.stack([_static(2.0)] * 2), pressure_3d), 1.0)
+    assert post.build_signal(f, rel_tol=1e-2, common_config=_clock_template(tmp_path)) == {"status": "continue"}
