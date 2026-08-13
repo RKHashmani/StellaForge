@@ -274,10 +274,47 @@ def test_prescribed_block_requires_species_names(tmp_path: Path) -> None:
 
 
 def test_prescribed_block_requires_n_radial(tmp_path: Path) -> None:
-    """Radial dimensions require a positive integer n_radial value."""
+    """Radial dimensions require an integer n_radial value."""
     structure = '[species]\nnames = ["e", "ion"]\n\n[geometry]\n\n'
     with pytest.raises(ValueError, match=r"\[geometry\]\.n_radial"):
         _prepare_with_profiles(tmp_path, _VALID_PRESCRIBED, structure)
+
+
+# NEOPAX closes the outer boundary from the two outermost cells, and Stages 3 and 4 rebuild the same
+# grid. A one-cell run therefore has no consumer. The n_radial check runs before any array shape
+# check, so the fixture arrays stay at their own length here.
+def test_prescribed_block_requires_at_least_two_radial_cells(tmp_path: Path) -> None:
+    """The validator rejects a single-cell radial grid."""
+    structure = '[species]\nnames = ["e", "ion"]\n\n[geometry]\nn_radial = 1\n\n'
+    with pytest.raises(ValueError, match=r"\[geometry\]\.n_radial to be an integer of at least 2"):
+        _prepare_with_profiles(tmp_path, _VALID_PRESCRIBED, structure)
+
+
+# NEOPAX reads its centered arrays under either spelling, but the Stage 3 and Stage 4 reader accepts
+# only "prescribed". A "given" block would therefore run NEOPAX on state the earlier stages never saw.
+def test_given_is_rejected_in_favour_of_prescribed(tmp_path: Path) -> None:
+    """The validator rejects the ``given`` synonym and names the accepted spelling."""
+    profiles = _replace_profile_value(_VALID_PRESCRIBED, "model", '"given"')
+    with pytest.raises(ValueError, match=r"\[profiles\]\.model is 'given'\. Use 'prescribed'"):
+        _prepare_with_profiles(tmp_path, profiles)
+
+
+# TOML parses a bare true or false into a Python bool, which is an int subclass. A numeric-element
+# check that only excludes nested lists would let a bool reach the solver.
+@pytest.mark.parametrize(
+    ("key", "value", "ndim"),
+    [
+        ("density", '[["a", 2.0, 3.0], [4.0, 5.0, 6.0]]', 2),
+        ("density_face", "[[true, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]", 2),
+        ("Er", '[0.0, "0.1", 0.2]', 1),
+        ("Er_face", "[0.0, 0.1, 0.2, false]", 1),
+    ],
+)
+def test_profile_arrays_hold_only_numbers(tmp_path: Path, key: str, value: str, ndim: int) -> None:
+    """The validator rejects string and boolean entries wherever they appear."""
+    profiles = _replace_profile_value(_VALID_PRESCRIBED, key, value)
+    with pytest.raises(ValueError, match=rf"\[profiles\]\.{key} must be a {ndim}-D array of numbers"):
+        _prepare_with_profiles(tmp_path, profiles)
 
 
 # Every tracked run config must pass the parse-time validation.

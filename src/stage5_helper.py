@@ -35,13 +35,19 @@ def _validate_neopax_profiles(cfg: dict[str, Any], template: str) -> None:
     Raises
     ------
     ValueError
-        If required state arrays are missing or have incorrect species or radial dimensions.
+        If the model is ``given``, if ``[geometry].n_radial`` is below 2, or if a required state
+        array is missing, non-numeric, or of the wrong species or radial dimensions.
     """
     profiles = cfg.get("profiles")
     if not isinstance(profiles, dict):
         return
     model = str(profiles.get("model", profiles.get("profiles_model", "standard_analytical"))).strip().lower()
-    if model not in ("prescribed", "given"):
+    if model == "given":
+        raise ValueError(
+            f"{template}: [profiles].model is 'given'. Use 'prescribed', the only spelling the Stage 3 "
+            "and Stage 4 prescribed-profiles reader accepts."
+        )
+    if model != "prescribed":
         return
 
     species = cfg.get("species")
@@ -52,8 +58,10 @@ def _validate_neopax_profiles(cfg: dict[str, Any], template: str) -> None:
 
     geometry = cfg.get("geometry")
     n_radial = geometry.get("n_radial") if isinstance(geometry, dict) else None
-    if not isinstance(n_radial, int) or isinstance(n_radial, bool) or n_radial < 1:
-        raise ValueError(f"{template}: prescribed profiles require a positive integer [geometry].n_radial.")
+    if not isinstance(n_radial, int) or isinstance(n_radial, bool) or n_radial < 2:
+        raise ValueError(
+            f"{template}: prescribed profiles require [geometry].n_radial to be an integer of at least 2."
+        )
 
     arrays = (
         ("density", 2, n_radial, "[geometry].n_radial"),
@@ -70,10 +78,13 @@ def _validate_neopax_profiles(cfg: dict[str, Any], template: str) -> None:
         if value is None:
             raise ValueError(f"{template}: [profiles].model is {model!r} but [profiles].{key} is missing.")
         is_table = isinstance(value, list) and all(
-            isinstance(row, list) and all(not isinstance(item, list) for item in row)
+            isinstance(row, list)
+            and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in row)
             for row in value
         )
-        is_vector = isinstance(value, list) and all(not isinstance(item, list) for item in value)
+        is_vector = isinstance(value, list) and all(
+            isinstance(item, (int, float)) and not isinstance(item, bool) for item in value
+        )
         if (ndim == 2 and not is_table) or (ndim == 1 and not is_vector):
             raise ValueError(f"{template}: [profiles].{key} must be a {ndim}-D array of numbers.")
         rows = value if ndim == 2 else [value]
@@ -153,7 +164,8 @@ def prepare_neopax_config(
     Raises
     ------
     ValueError
-        If prescribed profiles do not contain the center and face state required by Stages 3-5.
+        If [profiles].model is ``given``, or if prescribed profiles do not contain the center and
+        face state required by Stages 3-5.
     """
     resolved = Path(s5_resolved_config)
     resolved.parent.mkdir(parents=True, exist_ok=True)
