@@ -112,3 +112,7 @@ Because the executor does not ship Snakemake to the node (it is baked into the p
 
 - `job_wrapper.sh`
   Used by the GPU profile as the job executable. The executor hands it the Snakemake arguments with the `python -m snakemake` prefix stripped, and the wrapper runs them with the parent image's one Snakemake, `/app/.pixi/envs/htcondor-runtime/bin/snakemake`. There is no `PATH` fallback: if that path is missing, it dumps diagnostics to stderr and exits non-zero.
+
+### Addtional notes
+
+ - /src/snakemake_htcondor_compat.py patches a fix for a bug in snakemake on htcondor on missing "_event_log" attribute.

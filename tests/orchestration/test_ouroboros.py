@@ -103,6 +103,26 @@ def test_run_forward_pass_appends_extra_configfiles(monkeypatch: pytest.MonkeyPa
     ]
 
 
+def test_run_forward_pass_can_disable_shared_workdir_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_subprocess_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+
+    monkeypatch.setattr(ouroboros.subprocess, "run", fake_subprocess_run)
+    ouroboros.run_forward_pass(
+        target="out/converge_status.json",
+        input_dir="in",
+        output_dir="out",
+        cores=4,
+        config_path=Path("cfg.yaml"),
+        repo_root=Path("/repo"),
+        nolock=True,
+    )
+
+    assert "--nolock" in captured["cmd"]
+
+
 # Checks input validation and its ordering. It runs `main()` with `--max-iters 0` and a config path that doesn't exist.
 # The test asserts it raises ValueError about max-iters (not a file-not-found error), proving the loop-count guard runs
 # before the config is ever read.
