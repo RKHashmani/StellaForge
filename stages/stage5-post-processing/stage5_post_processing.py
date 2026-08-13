@@ -45,12 +45,13 @@ def pressure_converged(transport: Path, *, rel_tol: float) -> bool:
         This pass's ``transport_solution.h5`` (species-resolved ``pressure_faces`` or
         ``temperature_faces`` and ``density_faces``, plus ``rho_face``).
     rel_tol : float
-        Relative RMS tolerance; convergence requires the relative change below it.
+        Tolerance on the maximum pointwise relative change. Convergence requires the change at
+        every rho point to be below it.
 
     Returns
     -------
     bool
-        ``True`` if the relative RMS change is below ``rel_tol``, else ``False``.
+        ``True`` if the maximum pointwise relative change is below ``rel_tol``, else ``False``.
 
     Notes
     -----
@@ -70,12 +71,11 @@ def pressure_converged(transport: Path, *, rel_tol: float) -> bool:
         )
         return False
 
-    # Root-mean-square of the pointwise relative change. Normalising by the number of
-    # rho points keeps rel_tol grid-resolution independent, so it
-    # reads as a true relative tolerance regardless of the profile's radial resolution.
+    # Maximum of the pointwise absolute relative change over rho. Every rho point must settle
+    # within rel_tol, so a change confined to a few radii cannot be averaged below the tolerance.
     rel = (p_final - p_initial) / p_initial
-    rel_change = float(np.sqrt(np.mean(rel**2)))
-    logger.info("pressure relative RMS change = %.3e (rel_tol = %.3e)", rel_change, rel_tol)
+    rel_change = float(np.max(np.abs(rel)))
+    logger.info("pressure max relative change = %.3e (rel_tol = %.3e)", rel_change, rel_tol)
     return rel_change < rel_tol
 
 
@@ -140,7 +140,8 @@ def build_signal(transport: Path, *, rel_tol: float, common_config: Path) -> dic
     transport : Path
         This pass's ``transport_solution.h5``.
     rel_tol : float
-        Relative RMS tolerance forwarded to the convergence criterion.
+        Tolerance on the maximum pointwise relative change, forwarded to the convergence
+        criterion.
     common_config : Path
         The ``common_input.toml`` used for this pass. It supplies the configured horizon.
 
@@ -181,7 +182,8 @@ def main() -> None:
     parser.add_argument("--signal", type=Path, required=True,
                         help="Output path for the status JSON the driver reads.")
     parser.add_argument("--pressure-rel-tol", type=float, required=True,
-                        help="Relative RMS tolerance on the final-vs-initial total pressure profile.")
+                        help="Tolerance on the maximum pointwise relative change of the final-vs-initial "
+                             "total pressure profile.")
     args = parser.parse_args()
     if args.pressure_rel_tol <= 0.0:
         parser.error(f"--pressure-rel-tol must be positive, got {args.pressure_rel_tol}.")

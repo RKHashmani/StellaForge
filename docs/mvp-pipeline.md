@@ -567,20 +567,20 @@ outputs/<run>/loop/iter_N/
 
 ### Convergence
 
-Convergence is decided by `pressure_converged()` in `stage5_post_processing.py`. A pass is converged when this pass's `transport_solution.h5` shows the total pressure profile `P(rho)` has reached steady state, i.e. the root-mean-square (over rho) of the pointwise relative change between its initial and final time slices falls below the configured tolerance:
+Convergence is decided by `pressure_converged()` in `stage5_post_processing.py`. A pass is converged when this pass's `transport_solution.h5` shows the total pressure profile `P(rho)` has reached steady state, i.e. the maximum (over rho) of the pointwise absolute relative change between its initial and final time slices falls below the configured tolerance:
 
 ```
-sqrt( mean_rho[ ((P_final - P_initial) / P_initial)^2 ] ) < pressure_rel_tol
+max_rho | (P_final - P_initial) / P_initial | < pressure_rel_tol
 ```
 
-Normalising by the number of rho points (rather than a bare L2 norm) keeps `pressure_rel_tol` independent of the profile's radial resolution.
+The maximum makes `pressure_rel_tol` a worst-case pointwise bound. Every radius must settle within it. The tolerance stays independent of the profile's radial resolution.
 
 `pressure_rel_tol` is set in the top-level `convergence` block of the run config (defaulting to `1.0e-2`). Stage 5 post-processing (`build_signal()`) writes `converge_status.json` as `{"status": <string>}`, and `ouroboros` runs another pass only on `"continue"`. The four statuses, in the order `build_signal()` tests them:
 
 | Status | Meaning | Set when |
 | --- | --- | --- |
 | `halted` | the run cannot continue | the total pressure is non-positive at any rho on the initial or final time slice, i.e. the equilibrium was not sustained. Restart from different initial conditions rather than feed a collapsed profile forward. |
-| `converged` | the profile has settled | the relative RMS change above is below `pressure_rel_tol`. Reported ahead of `horizon`, since a pass that both settled and ran out of time is better described as settled. |
+| `converged` | the profile has settled | the maximum relative change above is below `pressure_rel_tol`. Reported ahead of `horizon`, since a pass that both settled and ran out of time is better described as settled. |
 | `horizon` | no transport time is left | the solution's `final_time` has reached `[transport_solver].t_final`. Because each pass resumes where the last one stopped, `t_final` is an absolute end time and not a per-pass window length, so there is nothing further to advance into. Raise `t_final` to keep evolving. |
 | `continue` | none of the above | the loop runs another pass, up to `--max-iters`. |
 

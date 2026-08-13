@@ -58,6 +58,17 @@ def test_pressure_converged_false_for_large_change(tmp_path: Path) -> None:
     assert not post.pressure_converged(f, rel_tol=1e-2)
 
 
+# The criterion takes the maximum over rho, so a change at a single face must fail convergence on
+# its own. The 2% change here has an rms of 0.02/sqrt(6) ~ 0.8% over the 6 faces, below rel_tol.
+# This case tells the maximum apart from an averaging criterion.
+def test_pressure_converged_false_for_single_point_change(tmp_path: Path) -> None:
+    slice0 = _static(2.0, n_rho=6)
+    slice1 = slice0.copy()
+    slice1[:, 3] *= 1.02  # 2% change at one face, zero elsewhere
+    f = _write(tmp_path / "spike.h5", np.stack([_static(2.0)] * 2), np.stack([slice0, slice1]))
+    assert not post.pressure_converged(f, rel_tol=1e-2)
+
+
 # Transport horizon
 
 # Each pass resumes where the last pass stopped. Therefore, ``t_final`` is the absolute end time.

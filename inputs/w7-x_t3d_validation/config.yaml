@@ -29,9 +29,9 @@ filenames:
   s5_signal: converge_status.json
 
 # Convergence criteria
-# Converged when the relative RMS change of the total pressure profile between
-# the initial and final transport time slices is below this tolerance:
-#   ||P_final - P_initial|| / ||P_initial|| < pressure_rel_tol
+# A pass converges when the maximum pointwise relative change of the total pressure
+# profile between the initial and final transport time slices is below this tolerance:
+#   max | (P_final - P_initial) / P_initial | < pressure_rel_tol
 convergence:
   pressure_rel_tol: 1.0e-2
 
