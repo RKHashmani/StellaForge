@@ -50,8 +50,9 @@ def _dry_run(
     config_overrides: list[str],
     extra_configfiles: list[str] | None = None,
     printshellcmds: bool = False,
+    configfile: str = "inputs/quick_run/config.yaml",
 ) -> subprocess.CompletedProcess:
-    """Plan the quick_run DAG with ``snakemake -n``, redirecting every write under ``tmp_path``.
+    """Plan a run with ``snakemake -n`` and redirect writes to ``tmp_path``.
 
     ``extra_configfiles`` are appended after the base config file under the same single
     ``--configfile`` flag, exactly as the loop driver passes its overrides file, and
@@ -59,7 +60,7 @@ def _dry_run(
     """
     return subprocess.run(
         ["snakemake", "-n", *(["-p"] if printshellcmds else []), *targets,
-         "--configfile", "inputs/quick_run/config.yaml", *(extra_configfiles or []),
+         "--configfile", configfile, *(extra_configfiles or []),
          "--workflow-profile", "none",
          "--runtime-source-cache-path", f"{tmp_path}/srccache",
          "--config", f"output_dir={tmp_path}/out", *config_overrides],
