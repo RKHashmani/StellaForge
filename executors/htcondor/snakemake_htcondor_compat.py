@@ -27,7 +27,6 @@ def patch_htcondor_batch_names(htcondor_module: Any, run_id: str) -> bool:
     if getattr(current_submit, "_driftless_star_batch_name_fix", False):
         return False
 
-    @wraps(current_submit)
     def submit(description: Any, *args: Any, **kwargs: Any) -> Any:
         if isinstance(description, dict) and description.get("batch_name"):
             # Changing job.name itself would also change Snakemake's remote
@@ -46,11 +45,6 @@ def patch_htcondor_batch_names(htcondor_module: Any, run_id: str) -> bool:
 def patch_htcondor_executor(executor_class: type[Any] | None = None) -> bool:
     """Install the executor 0.3.0 ``_event_logs`` initialization guard.
 
-    Under concurrent controllers, plugin 0.3.0 can call
-    ``_drain_unified_log`` before its instance has ``_event_logs``.  The
-    plugin treats that attribute as an initially empty per-cluster buffer, so
-    creating it lazily is equivalent to its normal ``__post_init__`` state.
-
     Returns ``True`` when the patch was installed and ``False`` when it was
     already present.
     """
@@ -62,7 +56,14 @@ def patch_htcondor_executor(executor_class: type[Any] | None = None) -> bool:
     if getattr(executor_class, "_driftless_star_event_logs_fix", False):
         return False
 
-    original = executor_class._drain_unified_log
+    original = getattr(executor_class, "_drain_unified_log", None)
+    if original is None:
+        raise RuntimeError(
+            "The driftless-star compatibility patch was written against "
+            "snakemake-executor-plugin-htcondor 0.3.0, and the installed plugin no "
+            "longer has _drain_unified_log. Re-check the patch against the new "
+            "plugin version."
+        )
 
     @wraps(original)
     def drain_unified_log(self: Any, *args: Any, **kwargs: Any) -> Any:
@@ -84,7 +85,7 @@ def main() -> None:
         patch_htcondor_batch_names(plugin.htcondor, run_id)
     from snakemake.cli import main as snakemake_main
 
-    raise SystemExit(snakemake_main())
+    snakemake_main()
 
 
 if __name__ == "__main__":
