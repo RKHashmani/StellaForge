@@ -30,7 +30,7 @@ from tests.orchestration.test_ouroboros import _write_config
 from tests.orchestration.test_ouroboros_gpu import _captured_argv
 
 PROFILE = "executors/htcondor/profiles/htcondor-gpu"
-HTCONDOR_SNAKEMAKE = [ouroboros.sys.executable, "-m", "src.snakemake_htcondor_compat"]
+HTCONDOR_SNAKEMAKE = [ouroboros.sys.executable, "-m", "executors.htcondor.snakemake_htcondor_compat"]
 
 
 def test_profile_is_emitted_ahead_of_both_config_groups(monkeypatch: pytest.MonkeyPatch) -> None:

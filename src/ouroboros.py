@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 def _snakemake_command(profile: str | None) -> list[str]:
     """Return the normal CLI or the submit-side HTCondor compatibility CLI."""
     if profile and "htcondor" in profile.lower():
-        return [sys.executable, "-m", "src.snakemake_htcondor_compat"]
+        return [sys.executable, "-m", "executors.htcondor.snakemake_htcondor_compat"]
     return ["snakemake"]
 
 

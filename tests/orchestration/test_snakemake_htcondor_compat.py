@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.snakemake_htcondor_compat import (
+from executors.htcondor.snakemake_htcondor_compat import (
     _run_batch_name,
     patch_htcondor_batch_names,
     patch_htcondor_executor,
