@@ -217,7 +217,6 @@ def run_forward_pass(
     extra_configfiles: list[Path] | None = None,
     extra_config: list[str] | None = None,
     profile: str | None = None,
-    nolock: bool = False,
     htcondor_jobdir: str | None = None,
 ) -> None:
     """
@@ -234,9 +233,6 @@ def run_forward_pass(
     profile : str, optional
         Snakemake profile directory (e.g. ``executors/htcondor/profiles/htcondor-gpu``). Sends the
         iteration's jobs to a cluster executor instead of running them locally.
-    nolock : bool, optional
-        Disable Snakemake's repository-wide working-directory lock. This is safe only when concurrent
-        controllers have disjoint input/output trees, as the batch runner guarantees.
     htcondor_jobdir : str, optional
         Per-run directory for HTCondor submit, error, output, and unified event-log files. Parallel
         controllers must not share this directory.
@@ -246,8 +242,6 @@ def run_forward_pass(
     # occurrence would replace the first and silently drop the base config. Later files
     # take precedence in the deep merge, and --config key=value overrides apply last.
     cmd = [*_snakemake_command(profile), target, "--cores", str(cores)]
-    if nolock:
-        cmd.append("--nolock")
     if profile:
         cmd += ["--profile", profile]
     if htcondor_jobdir:
@@ -280,9 +274,6 @@ def main() -> None:
                         help="Override the config's container_runtime for every iteration. A cluster "
                              "profile normally needs 'apptainer', since the execute nodes have no "
                              "Docker daemon.")
-    parser.add_argument("--nolock", action="store_true",
-                        help="Disable Snakemake's working-directory lock. Intended for parallel controllers "
-                             "whose run input/output trees do not overlap.")
     parser.add_argument("--htcondor-jobdir", type=str, default=None,
                         help="Per-run HTCondor log directory. Parallel controllers must use distinct values.")
     args = parser.parse_args()
@@ -362,8 +353,7 @@ def main() -> None:
         run_forward_pass(target=iter_p["s5_signal"], input_dir=iter_in, output_dir=iter_out,
                          cores=args.cores, config_path=config_path, repo_root=repo_root,
                          extra_configfiles=extra_configfiles, extra_config=config_overrides or None,
-                         profile=args.profile, nolock=args.nolock,
-                         htcondor_jobdir=args.htcondor_jobdir)
+                         profile=args.profile, htcondor_jobdir=args.htcondor_jobdir)
 
         prev_p = iter_p  # post-processing wrote both feedback artifacts; they seed iteration n+1
         signal = json.loads(_abs(repo_root, iter_p["s5_signal"]).read_text())
