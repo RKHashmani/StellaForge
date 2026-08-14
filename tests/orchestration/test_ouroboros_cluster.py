@@ -2,12 +2,14 @@
 
 ``--profile`` sends the loop's forward passes to a cluster executor instead of the local machine, and
 ``--container-runtime`` picks the tool that runs each stage's container, since an execute node has no
-Docker daemon and an HTCondor run needs ``apptainer``. Neither flag is useful without the other.
+Docker daemon and an HTCondor run needs ``apptainer``. Neither of those two is useful without the
+other. ``--htcondor-jobdir`` then gives one run its own directory for HTCondor's logs, which parallel
+controllers need so they do not both append to the same unified event log.
 
 What makes them worth testing is that they fail quietly. A ``--profile`` the driver forgets to emit
 raises no error at all -- the loop simply keeps running locally, and nobody notices until they wonder
 why the cluster queue is empty. So these tests assemble the command line the driver would run, without
-running it, and check that both flags are present, correctly positioned, and repeated on every
+running it, and check that each flag is present, correctly positioned, and repeated on every
 iteration, and that an unknown runtime is rejected on the submit host rather than inside the first
 cluster job.
 
@@ -52,16 +54,20 @@ def test_profile_survives_an_extra_configfile(monkeypatch: pytest.MonkeyPatch) -
     assert cmd[6:9] == ["--configfile", "cfg.yaml", "loop_overrides.yaml"]
 
 
-def test_htcondor_jobdir_is_forwarded_to_snakemake(monkeypatch: pytest.MonkeyPatch) -> None:
-    cmd = _captured_argv(monkeypatch, profile=PROFILE, htcondor_jobdir="/staging/runs/id1/htcondor")
+def test_htcondor_jobdir_survives_an_extra_configfile(monkeypatch: pytest.MonkeyPatch) -> None:
+    cmd = _captured_argv(monkeypatch, profile=PROFILE, htcondor_jobdir="/staging/runs/id1/htcondor",
+                         extra_configfiles=[Path("loop_overrides.yaml")])
 
-    assert cmd[cmd.index("--htcondor-jobdir") + 1] == "/staging/runs/id1/htcondor"
+    assert cmd[:8] == ["snakemake", "out/converge_status.json", "--cores", "4", "--profile", PROFILE,
+                       "--htcondor-jobdir", "/staging/runs/id1/htcondor"]
+    assert cmd[8:11] == ["--configfile", "cfg.yaml", "loop_overrides.yaml"]
 
 
-# Both flags describe where the whole invocation runs, not one pass of it, so every iteration has to
-# receive them. An iteration that lost either would quietly fall back to a local docker run partway
-# through the loop.
-def test_both_flags_reach_every_iteration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+# Each flag describes where the whole invocation runs, not one pass of it, so every iteration has to
+# receive all three. An iteration that lost --profile or --container-runtime would quietly fall back to
+# a local docker run partway through the loop; one that lost --htcondor-jobdir would write that
+# iteration's HTCondor logs to the shared directory the profile names.
+def test_cluster_flags_reach_every_iteration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
     monkeypatch.setattr(ouroboros, "_seed_iteration_inputs", lambda **kw: None)
 
