@@ -52,6 +52,12 @@ def test_profile_survives_an_extra_configfile(monkeypatch: pytest.MonkeyPatch) -
     assert cmd[6:9] == ["--configfile", "cfg.yaml", "loop_overrides.yaml"]
 
 
+def test_htcondor_jobdir_is_forwarded_to_snakemake(monkeypatch: pytest.MonkeyPatch) -> None:
+    cmd = _captured_argv(monkeypatch, profile=PROFILE, htcondor_jobdir="/staging/runs/id1/htcondor")
+
+    assert cmd[cmd.index("--htcondor-jobdir") + 1] == "/staging/runs/id1/htcondor"
+
+
 # Both flags describe where the whole invocation runs, not one pass of it, so every iteration has to
 # receive them. An iteration that lost either would quietly fall back to a local docker run partway
 # through the loop.
@@ -61,18 +67,19 @@ def test_both_flags_reach_every_iteration(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     forwarded: list[tuple] = []
 
-    def fake_run(*, target, extra_config=None, profile=None, **kw):
-        forwarded.append((profile, extra_config))
+    def fake_run(*, target, extra_config=None, profile=None, htcondor_jobdir=None, **kw):
+        forwarded.append((profile, extra_config, htcondor_jobdir))
         signal = Path(target)
         signal.parent.mkdir(parents=True, exist_ok=True)
         signal.write_text(json.dumps({"status": "continue"}))  # neither halt nor converged -> keep looping
 
     monkeypatch.setattr(ouroboros, "run_forward_pass", fake_run)
     monkeypatch.setattr("sys.argv", ["ouroboros", "--config", str(config_path), "--max-iters", "2",
-                                     "--profile", PROFILE, "--container-runtime", "apptainer"])
+                                     "--profile", PROFILE, "--container-runtime", "apptainer",
+                                     "--htcondor-jobdir", "/staging/runs/id1/htcondor"])
     ouroboros.main()
 
-    assert forwarded == [(PROFILE, ["container_runtime=apptainer"])] * 2
+    assert forwarded == [(PROFILE, ["container_runtime=apptainer"], "/staging/runs/id1/htcondor")] * 2
 
 
 # The choices list makes a typo fail at parse time on the submit host, rather than as an unclear
