@@ -472,6 +472,9 @@ pixi run driftless-star --max-iters 3 --cores 4
 | `--cores`     | `4`           | Cores passed to `snakemake --cores`.                 |
 | `--gpu-ids`   | the config's `gpu_ids` | Forwarded to every iteration's `snakemake --config` (see [Multi-GPU scheduling](#multi-gpu-scheduling)). |
 | `--jobs-per-gpu` | the config's `jobs_per_gpu` | Forwarded to every iteration's `snakemake --config`. |
+| `--profile`   | none, so iterations run locally | Snakemake profile directory forwarded to every iteration, e.g. `executors/htcondor/profiles/htcondor-gpu` to run on HTCondor. |
+| `--container-runtime` | the config's `container_runtime` | Tool that runs each stage's container, `docker` or `apptainer`. A cluster run needs `apptainer`, since the execute nodes have no Docker daemon. |
+| `--htcondor-jobdir` | the profile's `htcondor-jobdir` | Per-run directory for HTCondor's logs. Parallel controllers need distinct values (see [Where the logs go](../executors/htcondor/README.md#where-the-logs-go)). |
 
 > [!NOTE]
 > Each iteration is a full forward pass, so Docker must be running and all stage images must be available (the loop exercises `stage-1-vmec` through `stage-5-neopax`; the post-processing step reuses the Stage 5 image). The driver runs on the orchestration `pipeline` env, like Snakemake itself.

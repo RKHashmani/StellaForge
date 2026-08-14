@@ -83,7 +83,7 @@ The executor writes HTCondor's own log, stdout, and stderr under the profile's `
 - `jobs/snakemake-rules.log`: the unified HTCondor event log for every job
 - `jobs/<rule>/<rule>-<jobid>_<ClusterId>.out` / `.err`: per-job output
 
-Those paths are chosen by the plugin and cannot be redirected through `default-resources`.
+Those paths are chosen by the plugin and cannot be redirected through `default-resources`. The closed-loop driver's `--htcondor-jobdir` replaces `jobs/` for one run, and every iteration of that run is given the same directory. Two controllers sharing a checkout need distinct values: the event log is one file per directory, so otherwise both append to the same `jobs/snakemake-rules.log` and each reads the other's job events. Point it at a path on the submit host, which is where HTCondor writes the event log and where it returns each job's `.out` and `.err`.
 
 Each job's `.err` opens with `[job_wrapper]` diagnostics naming the Snakemake it resolved and that Snakemake's version, which is the first thing to read when jobs fail immediately.
 

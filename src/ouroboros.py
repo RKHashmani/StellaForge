@@ -209,6 +209,7 @@ def run_forward_pass(
     extra_configfiles: list[Path] | None = None,
     extra_config: list[str] | None = None,
     profile: str | None = None,
+    htcondor_jobdir: str | None = None,
 ) -> None:
     """
     Run one Snakemake forward pass for an iteration.
@@ -224,6 +225,9 @@ def run_forward_pass(
     profile : str, optional
         Snakemake profile directory (e.g. ``executors/htcondor/profiles/htcondor-gpu``). Sends the
         iteration's jobs to a cluster executor instead of running them locally.
+    htcondor_jobdir : str, optional
+        Per-run directory for HTCondor's error, output, and unified event-log files. Parallel
+        controllers must not share this directory.
     """
     logger.info("Forward pass [%s]: snakemake %s --cores %d", output_dir, target, cores)
     # Extra config files are appended under the single --configfile flag. A second flag
@@ -232,6 +236,8 @@ def run_forward_pass(
     cmd = ["snakemake", target, "--cores", str(cores)]
     if profile:
         cmd += ["--profile", profile]
+    if htcondor_jobdir:
+        cmd += ["--htcondor-jobdir", htcondor_jobdir]
     cmd += ["--configfile", str(config_path)]
     cmd += [str(p) for p in (extra_configfiles or [])]
     cmd += ["--config", f"input_dir={input_dir}", f"output_dir={output_dir}", *(extra_config or [])]
@@ -260,6 +266,8 @@ def main() -> None:
                         help="Override the config's container_runtime for every iteration. A cluster "
                              "profile normally needs 'apptainer', since the execute nodes have no "
                              "Docker daemon.")
+    parser.add_argument("--htcondor-jobdir", type=str, default=None,
+                        help="Per-run HTCondor log directory. Parallel controllers must use distinct values.")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -337,7 +345,7 @@ def main() -> None:
         run_forward_pass(target=iter_p["s5_signal"], input_dir=iter_in, output_dir=iter_out,
                          cores=args.cores, config_path=config_path, repo_root=repo_root,
                          extra_configfiles=extra_configfiles, extra_config=config_overrides or None,
-                         profile=args.profile)
+                         profile=args.profile, htcondor_jobdir=args.htcondor_jobdir)
 
         prev_p = iter_p  # post-processing wrote both feedback artifacts; they seed iteration n+1
         signal = json.loads(_abs(repo_root, iter_p["s5_signal"]).read_text())
