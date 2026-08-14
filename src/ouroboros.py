@@ -226,7 +226,7 @@ def run_forward_pass(
         Snakemake profile directory (e.g. ``executors/htcondor/profiles/htcondor-gpu``). Sends the
         iteration's jobs to a cluster executor instead of running them locally.
     htcondor_jobdir : str, optional
-        Per-run directory for HTCondor submit, error, output, and unified event-log files. Parallel
+        Per-run directory for HTCondor's error, output, and unified event-log files. Parallel
         controllers must not share this directory.
     """
     logger.info("Forward pass [%s]: snakemake %s --cores %d", output_dir, target, cores)
