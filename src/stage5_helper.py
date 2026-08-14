@@ -13,6 +13,41 @@ from pathlib import Path
 
 from .utils import apply_assignments
 
+PRESSURE_CONVERGENCE_METHODS = ("rms", "pointwise")
+
+
+def resolve_pressure_convergence_method(config: dict) -> str:
+    """Return the configured pressure convergence method, defaulting to pointwise.
+
+    Parameters
+    ----------
+    config : dict
+        Parsed run config. ``convergence.method`` may be ``"rms"`` or
+        ``"pointwise"``.
+
+    Returns
+    -------
+    str
+        The validated convergence method.
+
+    Raises
+    ------
+    ValueError
+        If the convergence block is not a mapping or its method is unsupported.
+    """
+    convergence = config.get("convergence", {})
+    if not isinstance(convergence, dict):
+        raise ValueError(
+            f"config['convergence'] must be a mapping, got {convergence!r}."
+        )
+    method = convergence.get("method", "pointwise")
+    if not isinstance(method, str) or method not in PRESSURE_CONVERGENCE_METHODS:
+        choices = ", ".join(repr(choice) for choice in PRESSURE_CONVERGENCE_METHODS)
+        raise ValueError(
+            f"config['convergence']['method'] must be one of {choices}, got {method!r}."
+        )
+    return method
+
 
 def read_rho_edge(s5_config_template: str) -> float:
     """Return ``[geometry].rho_edge`` from the NEOPAX template, or NEOPAX's default of 1.0.
