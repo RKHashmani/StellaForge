@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 import h5py
@@ -31,13 +32,13 @@ except ModuleNotFoundError:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
-def pressure_converged(transport: Path, *, rel_tol: float) -> bool:
-    """Return whether Stage 5's transport evolution has reached steady state.
+def _pressure_converged(transport: Path, *, rel_tol: float, method: str) -> bool:
+    """Return whether Stage 5's transport evolution meets ``method``'s criterion.
 
     Compares the total pressure profile `P(rho)` at the final time slice of `transport`
     against the initial time slice. A small final-vs-initial change means the transport
     evolution barely moved the input profile, so the boundary fed back to Stage 1 is
-    self-consistent. 
+    self-consistent.
 
     Parameters
     ----------
@@ -45,12 +46,20 @@ def pressure_converged(transport: Path, *, rel_tol: float) -> bool:
         This pass's ``transport_solution.h5`` (species-resolved ``pressure_faces`` or
         ``temperature_faces`` and ``density_faces``, plus ``rho_face``).
     rel_tol : float
-        Relative RMS tolerance; convergence requires the relative change below it.
+        Relative tolerance; convergence requires the selected measure to be below it.
+    method : str
+        Relative-change measure: ``"rms"`` or ``"pointwise"``.
 
     Returns
     -------
     bool
-        ``True`` if the relative RMS change is below ``rel_tol``, else ``False``.
+        ``True`` if the selected relative-change measure is below ``rel_tol``, else
+        ``False``.
+
+    Raises
+    ------
+    ValueError
+        If ``method`` is not ``"rms"`` or ``"pointwise"``.
 
     Notes
     -----
@@ -59,6 +68,11 @@ def pressure_converged(transport: Path, *, rel_tol: float) -> bool:
     be assessed; this returns ``False`` with a warning so the loop never stops on a
     non-evolving profile.
     """
+    if method not in {"rms", "pointwise"}:
+        raise ValueError(
+            f"Unsupported pressure convergence method {method!r}; expected one of: rms, pointwise"
+        )
+
     _, p_initial, idx_initial = _load_total_pressure(transport, time_index=0, final_time=False)
     _, p_final, idx_final = _load_total_pressure(transport, time_index=-1, final_time=True)
 
@@ -70,19 +84,44 @@ def pressure_converged(transport: Path, *, rel_tol: float) -> bool:
         )
         return False
 
-    # Root-mean-square of the pointwise relative change. Normalising by the number of
-    # rho points keeps rel_tol grid-resolution independent, so it
-    # reads as a true relative tolerance regardless of the profile's radial resolution.
     rel = (p_final - p_initial) / p_initial
-    rel_change = float(np.sqrt(np.mean(rel**2)))
-    logger.info("pressure relative RMS change = %.3e (rel_tol = %.3e)", rel_change, rel_tol)
+    if method == "rms":
+        # Normalising by the number of rho points keeps the RMS grid-resolution independent.
+        rel_change = float(np.sqrt(np.mean(rel**2)))
+        measure = "relative RMS"
+    else:
+        # Every rho point must settle within rel_tol; a local change cannot be averaged away.
+        rel_change = float(np.max(np.abs(rel)))
+        measure = "maximum pointwise relative"
+
+    logger.info("pressure %s change = %.3e (rel_tol = %.3e)", measure, rel_change, rel_tol)
     return rel_change < rel_tol
 
 
-# Alternative convergence criterion
-def return_converged_false(transport: Path) -> bool:
-    """Always report not converged (placeholder criterion, kept as an alternative)."""
-    return False
+def rms_pressure_converged(transport: Path, *, rel_tol: float) -> bool:
+    """Return whether the relative RMS pressure change is below ``rel_tol``."""
+    return _pressure_converged(transport, rel_tol=rel_tol, method="rms")
+
+
+def pointwise_pressure_converged(transport: Path, *, rel_tol: float) -> bool:
+    """Return whether every point's relative pressure change is below ``rel_tol``."""
+    return _pressure_converged(transport, rel_tol=rel_tol, method="pointwise")
+
+
+_PRESSURE_CONVERGENCE_METHODS: dict[str, Callable[..., bool]] = {
+    "rms": rms_pressure_converged,
+    "pointwise": pointwise_pressure_converged,
+}
+
+
+def resolve_pressure_convergence(method: str) -> Callable[..., bool]:
+    """Return the pressure convergence function registered for ``method``."""
+    try:
+        return _PRESSURE_CONVERGENCE_METHODS[method]
+    except KeyError:
+        raise ValueError(
+            f"Unsupported pressure convergence method {method!r}; expected one of: rms, pointwise"
+        ) from None
 
 
 def transport_horizon_reached(transport: Path, common_config: Path) -> bool:
@@ -129,7 +168,13 @@ def transport_horizon_reached(transport: Path, common_config: Path) -> bool:
     return final_time >= t_final
 
 
-def build_signal(transport: Path, *, rel_tol: float, common_config: Path) -> dict[str, str]:
+def build_signal(
+    transport: Path,
+    *,
+    rel_tol: float,
+    common_config: Path,
+    convergence_method: str = "pointwise",
+) -> dict[str, str]:
     """Build the closed-loop status signal for the driver.
 
     The status is ``continue``, ``converged``, ``horizon`` or ``halted``. The driver runs another
@@ -140,15 +185,19 @@ def build_signal(transport: Path, *, rel_tol: float, common_config: Path) -> dic
     transport : Path
         This pass's ``transport_solution.h5``.
     rel_tol : float
-        Relative RMS tolerance forwarded to the convergence criterion.
+        Relative tolerance forwarded to the selected convergence criterion.
     common_config : Path
         The ``common_input.toml`` used for this pass. It supplies the configured horizon.
+    convergence_method : str
+        Pressure convergence method, ``"rms"`` or ``"pointwise"`` (the default).
 
     Returns
     -------
     dict
         Mapping with one ``status`` string.
     """
+    pressure_converged = resolve_pressure_convergence(convergence_method)
+
     for label, time_index, final_time in (("initial", 0, False), ("final", -1, True)):
         _, pressure, _ = _load_total_pressure(transport, time_index=time_index, final_time=final_time)
         if np.any(pressure <= 0.0):
@@ -181,12 +230,23 @@ def main() -> None:
     parser.add_argument("--signal", type=Path, required=True,
                         help="Output path for the status JSON the driver reads.")
     parser.add_argument("--pressure-rel-tol", type=float, required=True,
-                        help="Relative RMS tolerance on the final-vs-initial total pressure profile.")
+                        help="Relative tolerance on the final-vs-initial total pressure profile.")
+    parser.add_argument(
+        "--pressure-convergence-method",
+        choices=_PRESSURE_CONVERGENCE_METHODS,
+        default="pointwise",
+        help="Pressure convergence method: rms or pointwise (default).",
+    )
     args = parser.parse_args()
     if args.pressure_rel_tol <= 0.0:
         parser.error(f"--pressure-rel-tol must be positive, got {args.pressure_rel_tol}.")
 
-    status = build_signal(args.transport, rel_tol=args.pressure_rel_tol, common_config=args.common_config)
+    status = build_signal(
+        args.transport,
+        rel_tol=args.pressure_rel_tol,
+        common_config=args.common_config,
+        convergence_method=args.pressure_convergence_method,
+    )
     args.signal.parent.mkdir(parents=True, exist_ok=True)
     args.signal.write_text(json.dumps(status) + "\n")
     print(f"# converge_status: {status}")

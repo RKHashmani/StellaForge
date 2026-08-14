@@ -158,7 +158,8 @@ STAGE4_CFG = config["stage4"]["gkx"]
 # Resolved here rather than beside its rule so a misspelled convention is caught even when the run freezes Stage 4.
 RADIUS_RELABEL_CONVENTION = stage4_helper.resolve_radius_relabel(config)
 
-# Stage 5 post-processing convergence threshold (see the `convergence` block in inputs/<run>/config.yaml).
+# Stage 5 post-processing convergence criterion (see the `convergence` block in inputs/<run>/config.yaml).
+PRESSURE_CONVERGENCE_METHOD = stage5_helper.resolve_pressure_convergence_method(config)
 PRESSURE_REL_TOL = config.get("convergence", {}).get("pressure_rel_tol", 1.0e-2)
 
 # Write a path-resolved copy of the NEOPAX template under outputs/ and run that (template untouched).
@@ -386,5 +387,6 @@ rule stage5_post_processing:
         '{input.transport} {input.common_config} --output-toml {output.profiles_feedback} && '
         'python stages/stage5-post-processing/stage5_post_processing.py '
         '--transport {input.transport} --common-config {input.common_config} '
-        f'--signal {{output.signal}} --pressure-rel-tol {PRESSURE_REL_TOL}"'
+        f'--signal {{output.signal}} --pressure-rel-tol {PRESSURE_REL_TOL} '
+        f'--pressure-convergence-method {PRESSURE_CONVERGENCE_METHOD}"'
         " 2>&1 | tee {log}"
