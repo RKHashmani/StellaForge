@@ -29,6 +29,5 @@ default-resources:
   htcondor_transfer_input_files: "Snakefile,src,stages,inputs,executors/htcondor"
   requirements: '(HasCHTCStaging==true)'
   request_gpus: "1"
-  request_cpus: "10"
   request_disk: "50GB"
   request_memory: "50GB"
