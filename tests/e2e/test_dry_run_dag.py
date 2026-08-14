@@ -70,6 +70,13 @@ def _dry_run(
     )
 
 
+def _write_convergence_override(tmp_path: Path, method: str) -> str:
+    """Write a layered run config that changes only the convergence method."""
+    path = tmp_path / f"convergence-{method}.yaml"
+    path.write_text(yaml.safe_dump({"convergence": {"method": method}}))
+    return str(path)
+
+
 # This runs the default forward pass and asserts it plans successfully (exit code 0), that every stage rule visible
 # before the checkpoints run is scheduled (including both deferred collect gathers), and that the post-processing rule
 # is NOT scheduled, because the default target is a pure forward pass with no loop-closing step. This catches Snakefile
@@ -100,6 +107,40 @@ def test_s5_signal_target_schedules_post_processing(tmp_path: Path) -> None:
     # Requesting the convergence signal pulls in the loop-closing rule and formats its
     # shell string, which rule all (a pure forward pass) never reaches.
     assert "stage5_post_processing" in output, output
+
+
+def test_convergence_method_reaches_the_post_processing_command(tmp_path: Path) -> None:
+    config = yaml.safe_load((REPO_ROOT / "inputs/quick_run/config.yaml").read_text())
+    s5_signal = resolve_pipeline_paths(config, output_dir=f"{tmp_path}/out")["s5_signal"]
+
+    baseline = _dry_run(tmp_path, targets=[s5_signal], config_overrides=[], printshellcmds=True)
+    baseline_output = baseline.stdout + baseline.stderr
+    assert baseline.returncode == 0, baseline_output
+    assert "--pressure-convergence-method pointwise" in baseline_output, baseline_output
+
+    rms = _dry_run(
+        tmp_path,
+        targets=[s5_signal],
+        config_overrides=[],
+        extra_configfiles=[_write_convergence_override(tmp_path, "rms")],
+        printshellcmds=True,
+    )
+    rms_output = rms.stdout + rms.stderr
+    assert rms.returncode == 0, rms_output
+    assert "--pressure-convergence-method rms" in rms_output, rms_output
+
+
+def test_unknown_convergence_method_fails_at_parse_time(tmp_path: Path) -> None:
+    result = _dry_run(
+        tmp_path,
+        targets=[],
+        config_overrides=[],
+        extra_configfiles=[_write_convergence_override(tmp_path, "maximum")],
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "config['convergence']['method']" in output, output
+    assert "'rms', 'pointwise'" in output, output
 
 
 # From iteration 2 the loop driver appends its loop_overrides.yaml after the base config file, switching both stage

@@ -123,7 +123,7 @@ A *run* is a folder under `inputs/` that holds its run config (`config.yaml`) an
 pixi run driftless-star --config inputs/quick_run/config.yaml --max-iters 3 --cores 4
 ```
 
-Each iteration is a full pipeline run under its own `outputs/<run>/loop/iter_N/` tree (`outputs/` is gitignored). Stage 5 writes `output/stage5_post_processing/converge_status.json` with one status. The driver starts another iteration only for `continue`. It stops for `converged`, `horizon`, or `halted`, and it also stops at `--max-iters`. Stages listed under `loop.rerun` as `false` are frozen, so iterations after the first reuse their iteration 1 artifacts. See [docs/mvp-pipeline.md](docs/mvp-pipeline.md#closing-the-loop).
+Each iteration is a full pipeline run under its own `outputs/<run>/loop/iter_N/` tree (`outputs/` is gitignored). Stage 5 writes `output/stage5_post_processing/converge_status.json`, and the driver stops early once the pressure profile settles under the config's `convergence.method` (`rms` or `pointwise`) and `convergence.pressure_rel_tol`. It starts another iteration only for `continue`, stops for `converged`, `horizon`, or `halted`, and also stops at `--max-iters`. Stages listed under `loop.rerun` as `false` are frozen, so iterations after the first reuse their iteration 1 artifacts. See [docs/mvp-pipeline.md](docs/mvp-pipeline.md#closing-the-loop).
 
 ### Run a single forward pass
 

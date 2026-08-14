@@ -28,11 +28,11 @@ filenames:
   s5_output: transport_solution.h5
   s5_signal: converge_status.json
 
-# Convergence criteria
-# A pass converges when the maximum pointwise relative change of the total pressure
-# profile between the initial and final transport time slices is below this tolerance:
-#   max | (P_final - P_initial) / P_initial | < pressure_rel_tol
+# Pressure convergence criterion. Options:
+#   rms:       sqrt(mean(((P_final - P_initial) / P_initial)^2))
+#   pointwise: max(abs((P_final - P_initial) / P_initial))
 convergence:
+  method: pointwise
   pressure_rel_tol: 1.0e-2
 
 # Per-stage rerun flags for the ouroboros closed-loop driver, where a stage set to false

@@ -570,24 +570,32 @@ outputs/<run>/loop/iter_N/
 
 ### Convergence
 
-Convergence is decided by `pressure_converged()` in `stage5_post_processing.py`. A pass is converged when this pass's `transport_solution.h5` shows the total pressure profile `P(rho)` has reached steady state, i.e. the maximum (over rho) of the pointwise absolute relative change between its initial and final time slices falls below the configured tolerance:
+Convergence is decided by the configured pressure method in `stage5_post_processing.py`. Both methods compare the total pressure profile `P(rho)` in this pass's `transport_solution.h5` between its initial and final time slices. `resolve_pressure_convergence()` selects one of:
+
+- `rms`, implemented by `rms_pressure_converged()`: the root-mean-square over rho of the pointwise relative change must satisfy
+
+```
+sqrt( mean_rho[ ((P_final - P_initial) / P_initial)^2 ] ) < pressure_rel_tol
+```
+
+- `pointwise` (the default), implemented by `pointwise_pressure_converged()`: the maximum absolute pointwise relative change must satisfy
 
 ```
 max_rho | (P_final - P_initial) / P_initial | < pressure_rel_tol
 ```
 
-The maximum makes `pressure_rel_tol` a worst-case pointwise bound. Every radius must settle within it. The tolerance stays independent of the profile's radial resolution.
+The RMS method allows a change confined to a few radii to be averaged below the tolerance, while the pointwise method requires every radius to settle within it. Both measures stay independent of the profile's radial resolution.
 
-`pressure_rel_tol` is set in the top-level `convergence` block of the run config (defaulting to `1.0e-2`). Stage 5 post-processing (`build_signal()`) writes `converge_status.json` as `{"status": <string>}`, and `ouroboros` runs another pass only on `"continue"`. The four statuses, in the order `build_signal()` tests them:
+`method` and `pressure_rel_tol` are set in the top-level `convergence` block of the run config, defaulting to `pointwise` and `1.0e-2` when omitted. Stage 5 post-processing (`build_signal()`) writes `converge_status.json` as `{"status": <string>}`, and `ouroboros` runs another pass only on `"continue"`. The four statuses, in the order `build_signal()` tests them:
 
 | Status | Meaning | Set when |
 | --- | --- | --- |
 | `halted` | the run cannot continue | the total pressure is non-positive at any rho on the initial or final time slice, i.e. the equilibrium was not sustained. Restart from different initial conditions rather than feed a collapsed profile forward. |
-| `converged` | the profile has settled | the maximum relative change above is below `pressure_rel_tol`. Reported ahead of `horizon`, since a pass that both settled and ran out of time is better described as settled. |
+| `converged` | the profile has settled | the selected pressure-change measure is below `pressure_rel_tol`. Reported ahead of `horizon`, since a pass that both settled and ran out of time is better described as settled. |
 | `horizon` | no transport time is left | the solution's `final_time` has reached `[transport_solver].t_final`. Because each pass resumes where the last one stopped, `t_final` is an absolute end time and not a per-pass window length, so there is nothing further to advance into. Raise `t_final` to keep evolving. |
 | `continue` | none of the above | the loop runs another pass, up to `--max-iters`. |
 
-If the transport solution has fewer than two distinct time slices, convergence cannot be assessed and the pass is not converged, which is neither a halt nor an error. A `return_converged_false()` placeholder is kept under an "Alternative Convergence Criteria" comment so a different criterion can be swapped in.
+If the transport solution has fewer than two distinct time slices, convergence cannot be assessed and the pass is not converged, which is neither a halt nor an error.
 
 > [!NOTE]
 > To render the file-flow graph *including* this post-processing step, target the signal file; see the [README](../README.md#visualize-the-pipeline-graph). Omitting the target graphs the plain forward pass (stops at Stage 5).

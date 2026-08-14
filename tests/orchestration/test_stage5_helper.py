@@ -15,7 +15,11 @@ from pathlib import Path
 
 import pytest
 
-from src.stage5_helper import prepare_neopax_config, read_rho_edge
+from src.stage5_helper import (
+    prepare_neopax_config,
+    read_rho_edge,
+    resolve_pressure_convergence_method,
+)
 
 _TEMPLATE = (
     'vmec_file = "PLACEHOLDER"\n'
@@ -24,6 +28,34 @@ _TEMPLATE = (
     'turbulence_file = "PLACEHOLDER"\n'
     'transport_output_dir = "PLACEHOLDER"\n'
 )
+
+
+# --- convergence method ---
+
+
+@pytest.mark.parametrize(
+    "config",
+    [{}, {"convergence": {}}, {"convergence": {"pressure_rel_tol": 1.0e-2}}],
+)
+def test_pressure_convergence_method_defaults_to_pointwise(config: dict) -> None:
+    assert resolve_pressure_convergence_method(config) == "pointwise"
+
+
+@pytest.mark.parametrize("method", ["rms", "pointwise"])
+def test_pressure_convergence_method_accepts_supported_values(method: str) -> None:
+    assert resolve_pressure_convergence_method({"convergence": {"method": method}}) == method
+
+
+@pytest.mark.parametrize("method", ["RMS", "maximum", True, None, 1])
+def test_pressure_convergence_method_rejects_unsupported_values(method: object) -> None:
+    with pytest.raises(ValueError, match=r"config\['convergence'\]\['method'\]"):
+        resolve_pressure_convergence_method({"convergence": {"method": method}})
+
+
+@pytest.mark.parametrize("convergence", [None, "rms", ["rms"]])
+def test_pressure_convergence_method_requires_a_mapping(convergence: object) -> None:
+    with pytest.raises(ValueError, match=r"config\['convergence'\] must be a mapping"):
+        resolve_pressure_convergence_method({"convergence": convergence})
 
 
 def _prepare(tmp_path: Path) -> tuple[Path, Path]:

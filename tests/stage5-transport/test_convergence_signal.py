@@ -1,6 +1,6 @@
 """Tests for the Stage 5 post-processing convergence signal.
 
-These reuse the real ``pressure_converged`` and ``build_signal`` from
+These reuse the real pressure-convergence functions and ``build_signal`` from
 ``stage5_post_processing.py``, loaded by path. That script imports its sibling
 ``fit_vmec_pressure_from_transport_h5`` at module top, so loading it also exercises
 the sibling-import support in ``load_stage_module``.
@@ -8,6 +8,8 @@ the sibling-import support in ``load_stage_module``.
 
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -36,37 +38,71 @@ def _write(path: Path, pressure: np.ndarray, pressure_face: np.ndarray, n_rho: i
     )
 
 
-# `pressure_converged` decides whether the loop has settled by comparing the last two time slices of the pressure
-# profile. A static (single-slice) profile has no change to measure, so convergence cannot be confirmed: this writes
-# such a file and asserts the function returns False.
-def test_pressure_converged_false_for_static_profile(tmp_path: Path) -> None:
+# Both criteria compare the first and final pressure slices. A static profile has no
+# change to measure, so neither criterion may report convergence.
+@pytest.mark.parametrize(
+    "criterion",
+    [post.rms_pressure_converged, post.pointwise_pressure_converged],
+    ids=["rms", "pointwise"],
+)
+def test_pressure_converged_false_for_static_profile(tmp_path: Path, criterion) -> None:
     f = _write(tmp_path / "static.h5", _static(2.0), _static(2.0, n_rho=6))
-    assert not post.pressure_converged(f, rel_tol=1e-2)
+    assert not criterion(f, rel_tol=1e-2)
 
 
-def test_pressure_converged_true_for_small_change(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "criterion",
+    [post.rms_pressure_converged, post.pointwise_pressure_converged],
+    ids=["rms", "pointwise"],
+)
+def test_pressure_converged_true_for_small_change(tmp_path: Path, criterion) -> None:
     slice0 = _static(2.0, n_rho=6)
     pressure_3d = np.stack([slice0, slice0 * 1.0001])  # 0.01% change between slices
     f = _write(tmp_path / "small.h5", np.stack([_static(2.0)] * 2), pressure_3d)
-    assert post.pressure_converged(f, rel_tol=1e-2)
+    assert criterion(f, rel_tol=1e-2)
 
 
-def test_pressure_converged_false_for_large_change(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "criterion",
+    [post.rms_pressure_converged, post.pointwise_pressure_converged],
+    ids=["rms", "pointwise"],
+)
+def test_pressure_converged_false_for_large_change(tmp_path: Path, criterion) -> None:
     slice0 = _static(2.0, n_rho=6)
     pressure_3d = np.stack([slice0, slice0 * 2.0])  # 100% change between slices
     f = _write(tmp_path / "large.h5", np.stack([_static(2.0)] * 2), pressure_3d)
-    assert not post.pressure_converged(f, rel_tol=1e-2)
+    assert not criterion(f, rel_tol=1e-2)
 
 
-# The criterion takes the maximum over rho, so a change at a single face must fail convergence on
-# its own. The 2% change here has an rms of 0.02/sqrt(6) ~ 0.8% over the 6 faces, below rel_tol.
-# This case tells the maximum apart from an averaging criterion.
-def test_pressure_converged_false_for_single_point_change(tmp_path: Path) -> None:
+# A 2% change at one of six faces has an RMS of 0.02/sqrt(6), below the 1%
+# tolerance, but its maximum pointwise change remains 2%.
+def test_pressure_convergence_methods_distinguish_a_single_point_change(tmp_path: Path) -> None:
     slice0 = _static(2.0, n_rho=6)
     slice1 = slice0.copy()
-    slice1[:, 3] *= 1.02  # 2% change at one face, zero elsewhere
+    slice1[:, 3] *= 1.02
     f = _write(tmp_path / "spike.h5", np.stack([_static(2.0)] * 2), np.stack([slice0, slice1]))
-    assert not post.pressure_converged(f, rel_tol=1e-2)
+
+    assert post.rms_pressure_converged(f, rel_tol=1e-2)
+    assert not post.pointwise_pressure_converged(f, rel_tol=1e-2)
+
+
+@pytest.mark.parametrize(
+    ("method", "criterion"),
+    [
+        ("rms", post.rms_pressure_converged),
+        ("pointwise", post.pointwise_pressure_converged),
+    ],
+)
+def test_resolve_pressure_convergence_returns_registered_function(method: str, criterion) -> None:
+    assert post.resolve_pressure_convergence(method) is criterion
+
+
+def test_resolve_pressure_convergence_rejects_unknown_method() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"Unsupported pressure convergence method 'RMS'; expected one of: rms, pointwise",
+    ):
+        post.resolve_pressure_convergence("RMS")
 
 
 # Transport horizon
@@ -137,6 +173,56 @@ def test_build_signal_reports_convergence_ahead_of_the_horizon(tmp_path: Path) -
     pressure_3d = np.stack([slice0, slice0 * 1.0001])
     f = _with_clock(_write(tmp_path / "ok.h5", np.stack([_static(2.0)] * 2), pressure_3d), 2.0)
     assert post.build_signal(f, rel_tol=1e-2, common_config=_clock_template(tmp_path)) == {"status": "converged"}
+
+
+@pytest.mark.parametrize(
+    ("method", "expected_status"),
+    [("rms", "converged"), ("pointwise", "continue")],
+)
+def test_build_signal_uses_the_selected_pressure_convergence_method(
+    tmp_path: Path, method: str, expected_status: str
+) -> None:
+    slice0 = _static(2.0, n_rho=6)
+    slice1 = slice0.copy()
+    slice1[:, 3] *= 1.02
+    f = _with_clock(
+        _write(tmp_path / f"spike-{method}.h5", np.stack([_static(2.0)] * 2), np.stack([slice0, slice1])),
+        1.0,
+    )
+    assert post.build_signal(
+        f,
+        rel_tol=1e-2,
+        common_config=_clock_template(tmp_path),
+        convergence_method=method,
+    ) == {"status": expected_status}
+
+
+def test_main_accepts_the_pointwise_method_from_the_cli(tmp_path: Path, monkeypatch) -> None:
+    slice0 = _static(2.0, n_rho=6)
+    slice1 = slice0.copy()
+    slice1[:, 3] *= 1.02
+    transport = _with_clock(
+        _write(tmp_path / "cli-spike.h5", np.stack([_static(2.0)] * 2), np.stack([slice0, slice1])),
+        1.0,
+    )
+    common_config = _clock_template(tmp_path)
+    signal = tmp_path / "signal.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "stage5_post_processing.py",
+            "--transport", str(transport),
+            "--common-config", str(common_config),
+            "--signal", str(signal),
+            "--pressure-rel-tol", "0.01",
+            "--pressure-convergence-method", "pointwise",
+        ],
+    )
+
+    post.main()
+
+    assert json.loads(signal.read_text()) == {"status": "continue"}
 
 
 # This profile is not settled and has no transport time left. Another pass would repeat the same

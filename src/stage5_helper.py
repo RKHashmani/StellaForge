@@ -17,6 +17,41 @@ from typing import Any
 
 from .utils import apply_assignments
 
+PRESSURE_CONVERGENCE_METHODS = ("rms", "pointwise")
+
+
+def resolve_pressure_convergence_method(config: dict) -> str:
+    """Return the configured pressure convergence method, defaulting to pointwise.
+
+    Parameters
+    ----------
+    config : dict
+        Parsed run config. ``convergence.method`` may be ``"rms"`` or
+        ``"pointwise"``.
+
+    Returns
+    -------
+    str
+        The validated convergence method.
+
+    Raises
+    ------
+    ValueError
+        If the convergence block is not a mapping or its method is unsupported.
+    """
+    convergence = config.get("convergence", {})
+    if not isinstance(convergence, dict):
+        raise ValueError(
+            f"config['convergence'] must be a mapping, got {convergence!r}."
+        )
+    method = convergence.get("method", "pointwise")
+    if not isinstance(method, str) or method not in PRESSURE_CONVERGENCE_METHODS:
+        choices = ", ".join(repr(choice) for choice in PRESSURE_CONVERGENCE_METHODS)
+        raise ValueError(
+            f"config['convergence']['method'] must be one of {choices}, got {method!r}."
+        )
+    return method
+
 
 def _validate_neopax_profiles(cfg: dict[str, Any], template: str) -> None:
     """Validate a prescribed ``[profiles]`` section for the closed-loop pipeline.
