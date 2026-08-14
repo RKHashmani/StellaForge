@@ -30,13 +30,14 @@ from tests.orchestration.test_ouroboros import _write_config
 from tests.orchestration.test_ouroboros_gpu import _captured_argv
 
 PROFILE = "executors/htcondor/profiles/htcondor-gpu"
+HTCONDOR_SNAKEMAKE = [ouroboros.sys.executable, "-m", "executors.htcondor.snakemake_htcondor_compat"]
 
 
 def test_profile_is_emitted_ahead_of_both_config_groups(monkeypatch: pytest.MonkeyPatch) -> None:
     cmd = _captured_argv(monkeypatch, profile=PROFILE)
 
     assert cmd == [
-        "snakemake", "out/converge_status.json", "--cores", "4",
+        *HTCONDOR_SNAKEMAKE, "out/converge_status.json", "--cores", "4",
         "--profile", PROFILE,
         "--configfile", "cfg.yaml",
         "--config", "input_dir=in", "output_dir=out",
@@ -48,8 +49,15 @@ def test_profile_is_emitted_ahead_of_both_config_groups(monkeypatch: pytest.Monk
 def test_profile_survives_an_extra_configfile(monkeypatch: pytest.MonkeyPatch) -> None:
     cmd = _captured_argv(monkeypatch, profile=PROFILE, extra_configfiles=[Path("loop_overrides.yaml")])
 
-    assert cmd[:6] == ["snakemake", "out/converge_status.json", "--cores", "4", "--profile", PROFILE]
-    assert cmd[6:9] == ["--configfile", "cfg.yaml", "loop_overrides.yaml"]
+    prefix = [*HTCONDOR_SNAKEMAKE, "out/converge_status.json", "--cores", "4", "--profile", PROFILE]
+    assert cmd[:len(prefix)] == prefix
+    assert cmd[len(prefix):len(prefix) + 3] == ["--configfile", "cfg.yaml", "loop_overrides.yaml"]
+
+
+def test_htcondor_jobdir_is_forwarded_to_snakemake(monkeypatch: pytest.MonkeyPatch) -> None:
+    cmd = _captured_argv(monkeypatch, profile=PROFILE, htcondor_jobdir="/staging/runs/id1/htcondor")
+
+    assert cmd[cmd.index("--htcondor-jobdir") + 1] == "/staging/runs/id1/htcondor"
 
 
 # Both flags describe where the whole invocation runs, not one pass of it, so every iteration has to
