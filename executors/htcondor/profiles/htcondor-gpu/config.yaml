@@ -32,21 +32,21 @@ default-resources:
   request_disk: "50GB"
   request_memory: "50GB"
   classad_is_resumable: true
-  # request_gpus: "1"
+  request_gpus: "1"
 
 # per stage resource requests
 set-resources:
   stage3_run_one:
-    request_gpus: 1
+    # request_gpus: 1
     gpus_minimum_memory: 48000
     # GPU minimum memory is in MB
 
   stage4_run_one:
-    request_gpus: 1
+    # request_gpus: 1
     gpus_minimum_memory: 48000
 
   stage5_neopax:
-    request_gpus: 1
+    # request_gpus: 1
     gpus_minimum_memory: 48000
 
 # set cpu threads for each stage
