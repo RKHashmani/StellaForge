@@ -10,7 +10,7 @@
 # Note: The apptainer sif file need to be in the root dir to run successfully.
 
 executor: htcondor
-jobs: 8
+jobs: unlimited
 shared-fs-usage: none
 htcondor-shared-fs-prefixes: "/staging,/shared"
 # latency-wait: 120
@@ -29,5 +29,24 @@ default-resources:
   htcondor_transfer_input_files: "Snakefile,src,stages,inputs,executors/htcondor"
   requirements: '(HasCHTCStaging==true)'
   request_gpus: "1"
-  request_disk: "50GB"
-  request_memory: "50GB"
+  request_disk: "20GB"
+  request_memory: "16GB"
+  gpus_minimum_memory: "12GB"
+  classad_is_resumable: true
+
+set-resources:
+  stage4_run_one:
+    gpus_minimum_memory: "24GB"
+    request_memory: "64GB"
+
+set-threads:
+  stage1_vmec: 4
+  stage2_boozer: 4
+  stage3_prepare: 4
+  stage3_run_one: 4
+  stage3_collect: 4
+  stage4_prepare: 4
+  stage4_run_one: 4
+  stage4_collect: 4
+  stage5_neopax: 4
+  stage5_post_processing: 4
