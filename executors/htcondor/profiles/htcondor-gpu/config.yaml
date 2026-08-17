@@ -10,7 +10,7 @@
 # Note: The apptainer sif file need to be in the root dir to run successfully.
 
 executor: htcondor
-jobs: unlimited # set limit of jobs to run to inf
+jobs: unlimited
 shared-fs-usage: none
 htcondor-shared-fs-prefixes: "/staging,/shared"
 # latency-wait: 120
@@ -22,7 +22,6 @@ jobname: "{rule}-{jobid}"
 # The executor sets HTCondor's log, output, and error paths itself from this directory.
 htcondor-jobdir: jobs
 
-# all stages resource requests
 default-resources:
   universe: "container"
   container_image: "htcondor-runtime.sif"
@@ -34,22 +33,16 @@ default-resources:
   classad_is_resumable: true
   request_gpus: "1"
 
-# per stage resource requests
+
 set-resources:
   stage3_run_one:
-    # request_gpus: 1
     gpus_minimum_memory: 48000
     # GPU minimum memory is in MB
-
   stage4_run_one:
-    # request_gpus: 1
     gpus_minimum_memory: 48000
-
   stage5_neopax:
-    # request_gpus: 1
     gpus_minimum_memory: 48000
 
-# set cpu threads for each stage
 set-threads:
   stage1_vmec: 8
   stage2_boozer: 8
@@ -61,3 +54,4 @@ set-threads:
   stage4_collect: 8
   stage5_neopax: 8
   stage5_post_processing: 8
+  
