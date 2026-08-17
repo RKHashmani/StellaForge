@@ -36,12 +36,11 @@ default-resources:
 
 set-resources:
   stage3_run_one:
-    gpus_minimum_memory: 48000
-    # GPU minimum memory is in MB
+    gpus_minimum_memory: "48GB"
   stage4_run_one:
-    gpus_minimum_memory: 48000
+    gpus_minimum_memory: "48GB"
   stage5_neopax:
-    gpus_minimum_memory: 48000
+    gpus_minimum_memory: "48GB"
 
 set-threads:
   stage1_vmec: 8
